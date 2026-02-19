@@ -804,6 +804,21 @@ export async function search_files(ctx: ToolContext, args: any) {
   return result;
 }
 
+function stripSimpleQuotedSegments(s: string): string {
+  // Best-effort quote stripping for lightweight shell pattern checks.
+  return s
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``');
+}
+
+function hasBackgroundExecIntent(command: string): boolean {
+  const stripped = stripSimpleQuotedSegments(command);
+  // Detect standalone '&' token (background), but ignore && and redirection forms
+  // like >&2, <&, and &>.
+  return /(^|[;\s])&(?![&><\d])(?=($|[;\s]))/.test(stripped);
+}
+
 export async function exec(ctx: ToolContext, args: any) {
   const command = typeof args?.command === 'string' ? args.command : undefined;
   const cwd = args?.cwd ? resolvePath(ctx, args.cwd) : ctx.cwd;
@@ -842,6 +857,14 @@ export async function exec(ctx: ToolContext, args: any) {
     }
   }
 
+  if (hasBackgroundExecIntent(command)) {
+    throw new Error(
+      'exec: blocked background command (contains `&`). ' +
+      'Long-running/background jobs can stall one-shot sessions. ' +
+      'Run foreground smoke checks only, or use a dedicated service manager outside this task.'
+    );
+  }
+
   // ── Safety tier check (Phase 9) ──
   const verdict = checkExecSafety(command);
 
@@ -869,7 +892,8 @@ export async function exec(ctx: ToolContext, args: any) {
       if (verdict.reason === 'package install/remove') {
         throw new Error(
           `exec: blocked (${verdict.reason}) without --no-confirm/--yolo: ${command}\n` +
-          `Hint: package installs need explicit approval mode. Re-run the parent session with --no-confirm/--yolo, or ask the user to do so. Do NOT use spawn_task to bypass this restriction.`
+          `STOP: this is a session-level approval restriction. Adding --yolo/--no-confirm inside the shell command does NOT override it. ` +
+          `Re-run the parent session with --no-confirm/--yolo (or ask the user), and do NOT use spawn_task to bypass this restriction.`
         );
       }
       throw new Error(`exec: blocked (${verdict.reason}) without --no-confirm/--yolo: ${command}`);
@@ -921,6 +945,7 @@ export async function exec(ctx: ToolContext, args: any) {
     cwd,
     stdio: ['ignore', 'pipe', 'pipe'],
     shell: BASH_PATH,
+    detached: true,
   });
 
   const outChunks: Buffer[] = [];
@@ -931,13 +956,24 @@ export async function exec(ctx: ToolContext, args: any) {
   let errCaptured = 0;
   let killed = false;
 
+  const killProcessGroup = () => {
+    const pid = child.pid;
+    if (!pid) return;
+    try {
+      // detached:true places the shell in its own process group.
+      process.kill(-pid, 'SIGKILL');
+    } catch {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+  };
+
   const killTimer = setTimeout(() => {
     killed = true;
-    child.kill('SIGKILL');
+    killProcessGroup();
   }, Math.max(1, timeout) * 1000);
 
   // §11: kill child process if parent abort signal fires (Ctrl+C).
-  const onAbort = () => { killed = true; child.kill('SIGKILL'); };
+  const onAbort = () => { killed = true; killProcessGroup(); };
   ctx.signal?.addEventListener('abort', onAbort, { once: true });
 
   const pushCapped = (chunks: Buffer[], buf: Buffer, kind: 'out' | 'err') => {

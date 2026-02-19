@@ -143,6 +143,66 @@ describe('sub-agent config validation and limits', () => {
     }
   });
 
+  it('blocks spawn_task when task attempts package install in non-yolo parent mode', async () => {
+    let callNo = 0;
+
+    const fakeClient: any = {
+      async models() { return { data: [{ id: 'fake-model' }] }; },
+      async chatStream() {
+        callNo++;
+
+        if (callNo === 1) {
+          return {
+            id: 'p-1',
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'call_spawn',
+                    type: 'function',
+                    function: {
+                      name: 'spawn_task',
+                      arguments: JSON.stringify({ task: 'cd . && npm install', approval_mode: 'yolo' }),
+                    },
+                  },
+                ],
+              },
+            }],
+            usage: { prompt_tokens: 10, completion_tokens: 2 },
+          };
+        }
+
+        return {
+          id: 'p-2',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'done directly' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 2 },
+        };
+      },
+    };
+
+    const session = await createSession({
+      config: baseConfig(tmpDir, {
+        approval_mode: 'auto-edit',
+        no_confirm: false,
+        sub_agents: { enabled: true },
+      }),
+      runtime: { client: fakeClient },
+    });
+
+    try {
+      await session.ask('build app');
+      const toolMsg = session.messages.find((m: any) => m.role === 'tool' && m.tool_call_id === 'call_spawn') as any;
+      assert.ok(toolMsg, 'expected spawn_task tool result');
+      assert.ok(String(toolMsg.content ?? '').includes('blocked — package install/remove is restricted'));
+      assert.equal(callNo, 2, 'should continue in parent after blocked delegation');
+    } finally {
+      await session.close();
+    }
+  });
+
   it('honors sub-agent max_iterations/max_tokens/timeout_sec and result_token_cap', async () => {
     let callNo = 0;
     const subMaxTokensSeen: number[] = [];

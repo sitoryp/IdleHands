@@ -267,6 +267,13 @@ describe('exec', () => {
     await assert.rejects(() => exec(safeCtx, { command: 'rm -rf /' }), /BLOCKED.*rm targeting/i);
   });
 
+  it('blocks background shell commands to avoid hangs', async () => {
+    await assert.rejects(
+      () => exec(ctx, { command: 'node server.js &' }),
+      /blocked background command/i
+    );
+  });
+
   it('collapses stack traces', async () => {
     const stackScript = `node -e "
       function a() { throw new Error('boom'); }
