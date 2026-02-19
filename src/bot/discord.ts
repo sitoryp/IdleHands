@@ -504,36 +504,41 @@ When you escalate, your request will be re-run on a more capable model.`;
       turnId = newTurn.turnId;
     }
 
-    // Check for keyword-based escalation BEFORE calling the base model
+    // Check for keyword-based escalation BEFORE calling the model
+    // Allow escalation to higher tiers even if already escalated
     const escalation = managed.agentPersona?.escalation;
-    if (escalation?.models?.length && managed.currentModelIndex === 0 && managed.escalationCount === 0) {
+    if (escalation?.models?.length) {
       const kwResult = checkKeywordEscalation(msg.content, escalation);
       if (kwResult.escalate && kwResult.tier !== undefined) {
         // Use the tier to select the target model (tier 0 → models[0], tier 1 → models[1], etc.)
-        const modelIndex = Math.min(kwResult.tier, escalation.models.length - 1);
-        const targetModel = escalation.models[modelIndex];
-        console.error(`[bot:discord] ${managed.userId} keyword escalation: ${kwResult.reason} → ${targetModel}`);
-        
-        // Set up escalation
-        managed.currentModelIndex = modelIndex + 1;  // +1 because 0 is base model
-        managed.escalationCount = 1;
-        
-        // Recreate session with escalated model
-        const cfg: IdlehandsConfig = {
-          ...managed.config,
-          model: targetModel,
-        };
-        
-        try {
-          await recreateSession(managed, cfg);
-          // Re-acquire turn after recreation - must update turnId!
-          const newTurn = beginTurn(managed);
-          if (!newTurn) return;
-          turn = newTurn;
-          turnId = newTurn.turnId;
-        } catch (e: any) {
-          console.error(`[bot:discord] keyword escalation failed: ${e?.message ?? e}`);
-          // Continue with base model if escalation fails
+        const targetModelIndex = Math.min(kwResult.tier, escalation.models.length - 1);
+        // Only escalate if target tier is higher than current (currentModelIndex 0 = base, 1 = models[0], etc.)
+        const currentTier = managed.currentModelIndex - 1;  // -1 because 0 is base model
+        if (targetModelIndex > currentTier) {
+          const targetModel = escalation.models[targetModelIndex];
+          console.error(`[bot:discord] ${managed.userId} keyword escalation: ${kwResult.reason} → ${targetModel}`);
+          
+          // Set up escalation
+          managed.currentModelIndex = targetModelIndex + 1;  // +1 because 0 is base model
+          managed.escalationCount += 1;
+          
+          // Recreate session with escalated model
+          const cfg: IdlehandsConfig = {
+            ...managed.config,
+            model: targetModel,
+          };
+          
+          try {
+            await recreateSession(managed, cfg);
+            // Re-acquire turn after recreation - must update turnId!
+            const newTurn = beginTurn(managed);
+            if (!newTurn) return;
+            turn = newTurn;
+            turnId = newTurn.turnId;
+          } catch (e: any) {
+            console.error(`[bot:discord] keyword escalation failed: ${e?.message ?? e}`);
+            // Continue with current model if escalation fails
+          }
         }
       }
     }
@@ -637,6 +642,25 @@ When you escalate, your request will be re-run on a more capable model.`;
     } finally {
       clearInterval(watchdog);
       finishTurn(managed, turnId);
+
+      // Auto-deescalate back to base model after each request
+      if (managed.currentModelIndex > 0 && managed.agentPersona?.escalation) {
+        const baseModel = managed.agentPersona.model || config.model || 'default';
+        managed.currentModelIndex = 0;
+        managed.escalationCount = 0;
+        
+        const cfg: IdlehandsConfig = {
+          ...managed.config,
+          model: baseModel,
+        };
+        
+        try {
+          await recreateSession(managed, cfg);
+          console.error(`[bot:discord] ${managed.userId} auto-deescalated to ${baseModel}`);
+        } catch (e: any) {
+          console.error(`[bot:discord] auto-deescalation failed: ${e?.message ?? e}`);
+        }
+      }
 
       const next = managed.pendingQueue.shift();
       if (next && managed.state === 'idle' && !managed.inFlight) {
