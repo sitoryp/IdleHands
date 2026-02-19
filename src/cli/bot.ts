@@ -91,9 +91,6 @@ export async function installBotService(): Promise<boolean> {
   const unitPath = path.join(unitDir, UNIFIED_SERVICE);
   await fs.mkdir(unitDir, { recursive: true });
 
-  const nodeBin = process.execPath;
-  const cliPath = path.resolve(process.argv[1] || 'dist/index.js');
-
   const content = [
     '[Unit]',
     'Description=Idle Hands Bot Service',
@@ -102,7 +99,9 @@ export async function installBotService(): Promise<boolean> {
     '',
     '[Service]',
     'Type=simple',
-    `ExecStart=${nodeBin} ${cliPath} bot --all`,
+    // Resolve idlehands via PATH at service start time so upgrades/install-prefix
+    // changes do not bake in a stale absolute script path.
+    'ExecStart=/usr/bin/env idlehands bot --all',
     'Restart=on-failure',
     'RestartSec=10',
     `Environment=PATH=${process.env.PATH || '/usr/local/bin:/usr/bin:/bin'}`,
