@@ -1406,6 +1406,15 @@ export async function createSession(opts: {
       throw new Error('spawn_task: missing task');
     }
 
+    // Prevent using delegation to bypass package-install confirmation restrictions.
+    const taskSafety = checkExecSafety(task);
+    if (!cfg.no_confirm && taskSafety.tier === 'cautious' && taskSafety.reason === 'package install/remove') {
+      throw new Error(
+        'spawn_task: blocked — package install/remove is restricted in the current approval mode. ' +
+        'Do not delegate this to bypass confirmation requirements; ask the user to run with --no-confirm/--yolo instead.'
+      );
+    }
+
     const defaults = cfg.sub_agents ?? {};
     const taskId = ++subTaskSeq;
     const emitStatus = options?.emitStatus ?? (() => {});
@@ -2169,6 +2178,9 @@ export async function createSession(opts: {
 
     let lastPassiveVaultQuery = '';
     let malformedCount = 0;
+    let noProgressTurns = 0;
+    const NO_PROGRESS_TURN_CAP = 3;
+    let blockedPackageInstallAttempts = 0;
 
     const maybeInjectVaultContext = async () => {
       if (!vault || vaultMode !== 'passive') return;
@@ -2393,7 +2405,19 @@ export async function createSession(opts: {
           health: healthSnapshot,
         };
 
-        const msg = resp.choices?.[0]?.message;
+        const legacyChoice = (resp as any)?.role
+          ? {
+              finish_reason: (resp as any)?.finish_reason ?? 'stop',
+              message: {
+                role: (resp as any)?.role ?? 'assistant',
+                content: (resp as any)?.content ?? '',
+                tool_calls: (resp as any)?.tool_calls,
+              },
+            }
+          : undefined;
+        const choice0 = resp.choices?.[0] ?? legacyChoice;
+        const finishReason = choice0?.finish_reason ?? 'unknown';
+        const msg = choice0?.message;
         const content = msg?.content ?? '';
 
         // Conditionally strip thinking blocks based on harness config (§4i).
@@ -2449,6 +2473,44 @@ export async function createSession(opts: {
             }
           }
         }
+
+        if (cfg.verbose) {
+          console.warn(
+            `[turn ${turns}] finish_reason=${finishReason} content_chars=${content.length} visible_chars=${visible.length} tool_calls=${toolCallsArr?.length ?? 0}`
+          );
+        }
+
+        const narration = (visible || content || '').trim();
+        if ((!toolCallsArr || !toolCallsArr.length) && narration.length === 0) {
+          noProgressTurns += 1;
+          if (cfg.verbose) {
+            console.warn(`[loop] no-progress turn ${noProgressTurns}/${NO_PROGRESS_TURN_CAP} (empty response)`);
+          }
+          if (noProgressTurns >= NO_PROGRESS_TURN_CAP) {
+            throw new Error(
+              `no progress for ${NO_PROGRESS_TURN_CAP} consecutive turns (empty responses with no tool calls). ` +
+              `Likely malformed/empty model output loop; stopping early.`
+            );
+          }
+          messages.push({
+            role: 'user',
+            content: '[system] Your previous response was empty (no text, no tool calls). Continue by either calling a tool with valid JSON arguments or giving a final answer.',
+          });
+          await hookObj.onTurnEnd?.({
+            turn: turns,
+            toolCalls,
+            promptTokens: cumulativeUsage.prompt,
+            completionTokens: cumulativeUsage.completion,
+            promptTokensTurn,
+            completionTokensTurn,
+            ttftMs,
+            ttcMs,
+            ppTps,
+            tgTps,
+          });
+          continue;
+        }
+        noProgressTurns = 0;
 
         if (toolCallsArr && toolCallsArr.length) {
           // Deduplicate ghost tool calls: if llama-server's XML parser splits one
@@ -2765,6 +2827,9 @@ export async function createSession(opts: {
             } else if (builtInFn) {
               const value = await builtInFn(ctx as any, args);
               content = typeof value === 'string' ? value : JSON.stringify(value);
+              if (name === 'exec') {
+                blockedPackageInstallAttempts = 0;
+              }
             } else if (isLspTool && lspManager) {
               // LSP tool dispatch
               if (name === 'lsp_diagnostics') {
@@ -2877,6 +2942,21 @@ export async function createSession(opts: {
           const catchToolError = (e: any, tc: ToolCall) => {
             if (e instanceof AgentLoopBreak) throw e;
             const msg = e?.message ?? String(e);
+
+            // Fast-fail package install retry loops in non-yolo modes.
+            if (
+              tc.function.name === 'exec' &&
+              /blocked \(package install\/remove\) without --no-confirm\/--yolo/i.test(msg)
+            ) {
+              blockedPackageInstallAttempts += 1;
+              if (blockedPackageInstallAttempts >= 2) {
+                throw new AgentLoopBreak(
+                  'exec: repeated blocked package install attempts in current approval mode. ' +
+                  'This is a session-level restriction; command flags like --yolo/--no-confirm inside the shell command do not override it.'
+                );
+              }
+            }
+
             // Hook: onToolResult for errors (Phase 8.5)
             const callId = resolveCallId(tc);
             hookObj.onToolResult?.({ id: callId, name: tc.function.name, success: false, summary: msg || 'unknown error', result: `ERROR: ${msg || 'unknown error'}` });

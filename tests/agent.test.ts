@@ -241,6 +241,125 @@ describe('agent failure persistence', () => {
   });
 });
 
+describe('agent no-progress watchdog', () => {
+  it('fails early after consecutive empty turns instead of burning max iterations', async () => {
+    let calls = 0;
+
+    const fakeClient: any = {
+      async models() {
+        return { data: [{ id: 'fake-model' }] };
+      },
+      async warmup() {},
+      async chatStream() {
+        calls += 1;
+        return {
+          id: `np-${calls}`,
+          choices: [{ index: 0, message: { role: 'assistant', content: '' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        };
+      }
+    };
+
+    const config = baseConfig(tmpDir, { max_iterations: 20, verbose: false });
+
+    const session = await createSession({
+      config,
+      runtime: { client: fakeClient },
+    });
+
+    try {
+      await assert.rejects(
+        () => session.ask('build something'),
+        /no progress for 3 consecutive turns/i
+      );
+      assert.ok(calls <= 3, `expected early stop within 3 calls, got ${calls}`);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
+describe('agent package-install retry guard', () => {
+  it('stops quickly when package installs are repeatedly blocked in non-yolo mode', async () => {
+    let callNo = 0;
+
+    const fakeClient: any = {
+      async models() {
+        return { data: [{ id: 'fake-model' }] };
+      },
+      async warmup() {},
+      async chatStream() {
+        callNo += 1;
+
+        if (callNo === 1) {
+          return {
+            id: 'pkg-1',
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: 'e1',
+                  type: 'function',
+                  function: { name: 'exec', arguments: JSON.stringify({ command: 'npm install' }) }
+                }],
+              },
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          };
+        }
+
+        if (callNo === 2) {
+          return {
+            id: 'pkg-2',
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: 'e2',
+                  type: 'function',
+                  function: { name: 'exec', arguments: JSON.stringify({ command: 'npm install --no-confirm' }) }
+                }],
+              },
+            }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          };
+        }
+
+        return {
+          id: 'pkg-3',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'should not reach here' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        };
+      }
+    };
+
+    const config = baseConfig(tmpDir, {
+      max_iterations: 10,
+      approval_mode: 'auto-edit',
+      no_confirm: false,
+    });
+
+    const session = await createSession({
+      config,
+      runtime: { client: fakeClient },
+    });
+
+    try {
+      await assert.rejects(
+        () => session.ask('install deps'),
+        /repeated blocked package install attempts/i
+      );
+      assert.equal(callNo, 2, `expected guard to trip on second blocked attempt, got ${callNo}`);
+    } finally {
+      await session.close();
+    }
+  });
+});
+
 describe('agent vault + replay synergy', () => {
   it('compacts and archives compressed tool output when dropping context', async () => {
     const archived: any[] = [];
