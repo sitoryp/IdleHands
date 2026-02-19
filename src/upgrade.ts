@@ -19,7 +19,8 @@ import { fetchWithTimeout as fetchWithTimeoutStrict, stateDir } from './utils.js
 
 const GITHUB_OWNER = 'visorcraft';
 const GITHUB_REPO = 'idlehands';
-const NPM_PACKAGE = 'idlehands';
+const NPM_SCOPED_PACKAGE = '@visorcraft/idlehands';
+const RELEASE_ASSET_BASENAME = 'idlehands';
 const STATE_DIR = stateDir();
 const UPDATE_CHECK_FILE = path.join(STATE_DIR, 'last-update-check.json');
 const ROLLBACK_DIR = path.join(STATE_DIR, 'rollback');
@@ -97,21 +98,19 @@ function compareSemver(a: string, b: string): number {
 /** Detect how idlehands was installed by examining the install path. */
 export function detectInstallSource(): InstallSource {
   try {
-    // If installed via npm, the resolved path will be inside a node_modules or npm global dir
+    // If installed via npm, the resolved path will be inside node_modules.
     const resolved = execSync('which idlehands 2>/dev/null || echo ""', { encoding: 'utf8' }).trim();
     if (!resolved) return 'unknown';
 
-    // npm global installs go through lib/node_modules
-    const npmGlobal = execSync('npm root -g 2>/dev/null || echo ""', { encoding: 'utf8' }).trim();
-    if (npmGlobal && resolved.includes('node_modules')) {
+    if (resolved.includes('node_modules')) {
       return 'npm';
     }
 
-    // If the binary exists but isn't in node_modules, check if npm knows about it
+    // If the binary exists but isn't in node_modules, check npm global metadata.
     try {
-      const list = execSync('npm ls -g idlehands --json 2>/dev/null', { encoding: 'utf8' });
+      const list = execSync(`npm ls -g ${NPM_SCOPED_PACKAGE} --json 2>/dev/null`, { encoding: 'utf8' });
       const parsed = JSON.parse(list);
-      if (parsed?.dependencies?.idlehands) return 'npm';
+      if (parsed?.dependencies?.[NPM_SCOPED_PACKAGE]) return 'npm';
     } catch {}
 
     return 'github';
@@ -141,7 +140,8 @@ async function getLatestGitHub(timeoutMs = 3000): Promise<string | null> {
 /** Fetch the latest version from the npm registry. */
 async function getLatestNpm(timeoutMs = 3000): Promise<string | null> {
   try {
-    const res = await fetchWithTimeout(`https://registry.npmjs.org/${NPM_PACKAGE}/latest`, {
+    const pkg = encodeURIComponent(NPM_SCOPED_PACKAGE);
+    const res = await fetchWithTimeout(`https://registry.npmjs.org/${pkg}/latest`, {
       headers: { 'Accept': 'application/json', 'User-Agent': 'idlehands-cli' }
     }, timeoutMs);
     if (!res) return null;
@@ -237,12 +237,12 @@ interface RollbackInfo {
   timestamp: string;
 }
 
-/** Get the current npm global root for idlehands. */
+/** Get the current npm global install dir for idlehands. */
 function getNpmGlobalDir(): string | null {
   try {
     const root = execSync('npm root -g 2>/dev/null', { encoding: 'utf8' }).trim();
-    if (root) return path.join(root, NPM_PACKAGE);
-    return null;
+    if (!root) return null;
+    return path.join(root, NPM_SCOPED_PACKAGE);
   } catch {
     return null;
   }
@@ -273,7 +273,7 @@ async function backupForRollback(currentVersion: string, source: InstallSource):
     await fs.mkdir(ROLLBACK_DIR, { recursive: true });
 
     // Pack the current install into a tarball
-    const tgzName = `${NPM_PACKAGE}-${currentVersion}-rollback.tgz`;
+    const tgzName = `${RELEASE_ASSET_BASENAME}-${currentVersion}-rollback.tgz`;
     const tgzPath = path.join(ROLLBACK_DIR, tgzName);
 
     // Use npm pack from the install directory
@@ -376,7 +376,7 @@ export async function performUpgrade(currentVersion: string, source: InstallSour
   try {
     if (info.source === 'npm') {
       // npm global install
-      execSync(`npm install -g ${NPM_PACKAGE}@latest`, { stdio: 'inherit' });
+      execSync(`npm install -g ${NPM_SCOPED_PACKAGE}@latest`, { stdio: 'inherit' });
     } else {
       // GitHub release — download tarball with auth (private repos), then install locally
       const token = resolveGitHubToken();
@@ -390,7 +390,7 @@ export async function performUpgrade(currentVersion: string, source: InstallSour
       if (!releaseRes.ok) throw new Error(`Failed to fetch release v${info.latest}: HTTP ${releaseRes.status}`);
       const releaseData = await releaseRes.json() as any;
 
-      const tgzName = `${NPM_PACKAGE}-${info.latest}.tgz`;
+      const tgzName = `${RELEASE_ASSET_BASENAME}-${info.latest}.tgz`;
       const asset = (releaseData.assets ?? []).find((a: any) => a.name === tgzName);
       if (!asset) throw new Error(`Release v${info.latest} has no asset named ${tgzName}`);
 
@@ -434,9 +434,9 @@ export async function performUpgrade(currentVersion: string, source: InstallSour
     } else {
       console.error('\nManual upgrade:');
       if (info.source === 'npm') {
-        console.error(`  npm install -g ${NPM_PACKAGE}@latest`);
+        console.error(`  npm install -g ${NPM_SCOPED_PACKAGE}@latest`);
       } else {
-        console.error(`  npm install -g https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${info.latest}/${NPM_PACKAGE}-${info.latest}.tgz`);
+        console.error(`  npm install -g https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/v${info.latest}/${RELEASE_ASSET_BASENAME}-${info.latest}.tgz`);
       }
     }
     process.exit(1);
