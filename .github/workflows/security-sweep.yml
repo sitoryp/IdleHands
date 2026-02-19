@@ -19,15 +19,24 @@ jobs:
           node-version: 24
 
       - name: Install gitleaks
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          URL=$(curl -fsSL https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+          API="https://api.github.com/repos/gitleaks/gitleaks/releases/latest"
+          URL=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$API" \
             | grep browser_download_url \
             | grep -E 'linux_x64\.tar\.gz"$' \
             | head -n1 \
             | cut -d '"' -f4)
           test -n "$URL"
-          curl -fsSL "$URL" | sudo tar -xz -C /usr/local/bin gitleaks
+          curl -fsSL \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "$URL" | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
       - name: Install dependencies for package checks
