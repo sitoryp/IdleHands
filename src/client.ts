@@ -1,4 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import fsSync from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { ChatCompletionResponse, ChatMessage, ModelsResponse, ToolSchema } from './types.js';
 
 export type ClientError = Error & {
@@ -152,6 +155,82 @@ export class OpenAIClient {
   /** Default response timeout in ms (overridable per-call). */
   private defaultResponseTimeoutMs = 600_000;
 
+  /**
+   * When true, tools/tool_choice are stripped from API requests.
+   * Tool descriptions are injected into the system prompt instead,
+   * and tool calls are parsed from model content output.
+   * Auto-enabled when server template errors are detected.
+   */
+  contentModeToolCalls = false;
+
+  /**
+   * Built-in model name patterns known to need content-mode tool calls.
+   * Can be extended dynamically via ~/.config/idlehands/compat-models.json
+   */
+  static readonly CONTENT_MODE_PATTERNS: RegExp[] = [
+    /qwen3\.5.*397b/i,
+    /qwen3\.5.*moe/i,
+  ];
+
+  /** Telemetry counters for compatibility behavior. */
+  private compatTelemetry = {
+    knownPatternMatches: 0,
+    autoSwitches: 0,
+  };
+
+  private static dynamicPatternsCache: { patterns: RegExp[]; loadedAt: number } | null = null;
+
+  private static loadDynamicCompatPatterns(): RegExp[] {
+    try {
+      const now = Date.now();
+      if (OpenAIClient.dynamicPatternsCache && now - OpenAIClient.dynamicPatternsCache.loadedAt < 30_000) {
+        return OpenAIClient.dynamicPatternsCache.patterns;
+      }
+
+      const cfgPath = path.join(os.homedir(), '.config', 'idlehands', 'compat-models.json');
+      if (!fsSync.existsSync(cfgPath)) {
+        OpenAIClient.dynamicPatternsCache = { patterns: [], loadedAt: now };
+        return [];
+      }
+
+      const raw = fsSync.readFileSync(cfgPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed?.content_mode_patterns)
+        ? parsed.content_mode_patterns
+        : Array.isArray(parsed)
+          ? parsed
+          : [];
+
+      const patterns = arr
+        .filter((x: any) => typeof x === 'string' && x.trim().length)
+        .map((x: string) => new RegExp(x, 'i'));
+
+      OpenAIClient.dynamicPatternsCache = { patterns, loadedAt: now };
+      return patterns;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Check if a model name matches built-in or dynamic content-mode patterns. */
+  static needsContentMode(modelName: string): boolean {
+    const dynamic = OpenAIClient.loadDynamicCompatPatterns();
+    return [...OpenAIClient.CONTENT_MODE_PATTERNS, ...dynamic].some(p => p.test(modelName));
+  }
+
+
+  recordKnownPatternMatch(): void {
+    this.compatTelemetry.knownPatternMatches += 1;
+  }
+
+  getCompatTelemetry(): { knownPatternMatches: number; autoSwitches: number; contentModeActive: boolean } {
+    return {
+      knownPatternMatches: this.compatTelemetry.knownPatternMatches,
+      autoSwitches: this.compatTelemetry.autoSwitches,
+      contentModeActive: this.contentModeToolCalls,
+    };
+  }
+
   constructor(
     private endpoint: string,
     private readonly apiKey?: string,
@@ -270,6 +349,50 @@ export class OpenAIClient {
       }
     }
 
+    // Content-mode tool calls: strip tools/tool_choice from the request body,
+    // and sanitize historical tool_call structures that trigger template bugs.
+    if (this.contentModeToolCalls) {
+      // Capture tool schemas before deleting, for injection into system prompt
+      const toolSchemas = body.tools as any[] | undefined;
+      delete body.tools;
+      delete body.tool_choice;
+      if (Array.isArray(body.messages)) {
+        // Check if system message already has content-mode tool instructions
+        const sysMsg = body.messages.find((m: any) => m?.role === 'system');
+        const hasToolInstructions = sysMsg?.content && /Available tools:/i.test(String(sysMsg.content));
+
+        if (!hasToolInstructions && toolSchemas?.length && sysMsg) {
+          // Mid-session auto-switch: inject tool descriptions into system prompt
+          let toolBlock = '\n\nYou have access to the following tools. To call a tool, output a JSON block like:\n{"name": "tool_name", "arguments": {"param": "value"}}\nAvailable tools:\n';
+          for (const t of toolSchemas) {
+            const fn = (t as any)?.function;
+            if (fn?.name) {
+              const params = fn.parameters?.properties
+                ? Object.entries(fn.parameters.properties).map(([k, v]: [string, any]) => `${k}: ${(v as any).type ?? 'any'}`).join(', ')
+                : '';
+              toolBlock += `- ${fn.name}(${params}): ${fn.description ?? ''}\n`;
+            }
+          }
+          toolBlock += '\nOutput tool calls as JSON in your message content.';
+          sysMsg.content = String(sysMsg.content) + toolBlock;
+          this.log('Injected tool descriptions into system prompt for content-mode');
+        }
+
+        for (const m of body.messages) {
+          if (m?.role === 'assistant' && Array.isArray((m as any).tool_calls)) {
+            delete (m as any).tool_calls;
+          }
+          if (m?.role === 'tool' && 'tool_call_id' in (m as any)) {
+            delete (m as any).tool_call_id;
+            m.role = 'user';
+            if (typeof m.content === 'string') {
+              m.content = `[tool_result] ${m.content}`;
+            }
+          }
+        }
+      }
+    }
+
     return body;
   }
 
@@ -360,6 +483,7 @@ export class OpenAIClient {
 
     let lastErr: unknown = makeClientError(`POST /chat/completions failed without response`, 503, true);
     const reqStart = Date.now();
+    const seen5xxMessages: string[] = [];
 
     for (let attempt = 0; attempt < 3; attempt++) {
       // Build a combined signal that fires on caller abort OR response timeout.
@@ -504,6 +628,8 @@ export class OpenAIClient {
 
     let lastErr: unknown = makeClientError('POST /chat/completions (stream) failed without response', 503, true);
     const reqStart = Date.now();
+    const seen5xxMessages: string[] = [];  // Track 5xx error messages to detect deterministic failures
+    let switchedToContentModeThisCall = false;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       let res: Response;
@@ -564,11 +690,43 @@ export class OpenAIClient {
       // HTTP 5xx on stream → retry (and optionally fall back to non-stream after repeated failures)
       if (res.status >= 500 && res.status <= 599) {
         const text = await res.text().catch(() => '');
+        const errSig = `${res.status}:${text.slice(0, 500)}`;
         lastErr = makeClientError(
           `POST /chat/completions (stream) failed: ${res.status} ${res.statusText}${text ? `\n${text.slice(0, 2000)}` : ''}`,
           res.status,
           true
         );
+
+        // Detect template incompatibility (|items filter on string arguments)
+        // and auto-switch to content-mode tool calls
+        if (/filter.*items.*String|items.*type.*String/i.test(text)) {
+          if (switchedToContentModeThisCall) {
+            throw makeClientError(
+              `Template incompatibility persisted after content-mode switch. Aborting to avoid retry loop.
+${text.slice(0, 2000)}`,
+              res.status,
+              false
+            );
+          }
+          this.log('Detected tool-call template incompatibility (|items on String) — switching to content-mode tool calls');
+          console.warn('[warn] Server template cannot handle tool_calls format. Switching to content-mode (tools in system prompt).');
+          this.contentModeToolCalls = true;
+          this.compatTelemetry.autoSwitches += 1;
+          switchedToContentModeThisCall = true;
+          // Retry immediately with content mode (tools stripped from body)
+          return this.chatStream(opts);
+        }
+
+        // Detect deterministic server errors (same error body repeated) — bail immediately
+        if (seen5xxMessages.includes(errSig)) {
+          this.log(`Deterministic server error detected (same ${res.status} repeated) — not retrying`);
+          throw makeClientError(
+            `Server returns the same error repeatedly (${res.status}). This is likely a template or model compatibility issue, not a transient failure.\n${text.slice(0, 2000)}`,
+            res.status,
+            false  // not retryable
+          );
+        }
+        seen5xxMessages.push(errSig);
 
         // If we keep getting server errors, try a non-streaming request as a last resort.
         const allowFallback = (process.env.IDLEHANDS_STREAM_FALLBACK ?? '1') !== '0';
@@ -794,6 +952,40 @@ export class OpenAIClient {
     }
 
     throw lastErr;
+  }
+
+  /**
+   * Quick smoke test: send a minimal tool-call round-trip to detect template errors.
+   * Returns null on success, error message string on failure.
+   */
+  async smokeTestToolCalls(model: string): Promise<string | null> {
+    const testMessages: ChatMessage[] = [
+      { role: 'system', content: 'You are a test.' },
+      { role: 'user', content: 'test' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'test_1', type: 'function', function: { name: 'test_tool', arguments: '{"key":"value"}' } }] },
+      { role: 'tool', tool_call_id: 'test_1', content: 'ok' },
+    ];
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 15_000);
+      await this.chat({
+        model,
+        messages: testMessages,
+        max_tokens: 1,
+        temperature: 0,
+        signal: ac.signal,
+      });
+      clearTimeout(timer);
+      return null;
+    } catch (e: any) {
+      const msg = String(e?.message ?? e);
+      // Only flag template/format errors (5xx with template keywords), not connection issues
+      if (/500|template|filter|items|jinja/i.test(msg)) {
+        return `Tool-call template error: ${msg.slice(0, 500)}`;
+      }
+      // Other errors (timeout, connection) — don't block startup
+      return null;
+    }
   }
 
   private finalizeStreamAggregate(
