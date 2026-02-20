@@ -698,6 +698,15 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
   const xmlCalls = parseXmlToolCalls(trimmed);
   if (xmlCalls?.length) return xmlCalls;
 
+
+  // Case 5: Lightweight function-tag calls (seen in some Qwen content-mode outputs):
+  // <function=tool_name>
+  // {...json args...}
+  // </function>
+  // or single-line <function=tool_name>{...}</function>
+  const fnTagCalls = parseFunctionTagToolCalls(trimmed);
+  if (fnTagCalls?.length) return fnTagCalls;
+
   return null;
 }
 
@@ -1300,8 +1309,51 @@ export async function createSession(opts: {
   }
 
   // Harness-driven suffix: append to first user message (NOT system prompt — §9b KV cache rule)
+  // Check if model needs content-mode tool calls (known incompatible templates)
+  // This runs before harness checks so it works regardless of quirk flags.
+  {
+    const modelName = cfg.model ?? '';
+    const { OpenAIClient: OAIClient } = await import('./client.js');
+    if (!client.contentModeToolCalls && OAIClient.needsContentMode(modelName)) {
+      client.contentModeToolCalls = true;
+      client.recordKnownPatternMatch();
+      if (cfg.verbose) {
+        console.warn(`[info] Model "${modelName}" matched known content-mode pattern — using content-based tool calls`);
+      }
+    }
+  }
+
   if (harness.quirks.needsExplicitToolCallFormatReminder) {
-    sessionMeta += '\n\nIMPORTANT: Use the tool_calls mechanism to invoke tools. Do NOT write JSON tool invocations in your message text.';
+    if (client.contentModeToolCalls) {
+      // In content mode, tell the model to use JSON tool calls in its output
+      sessionMeta += '\n\nYou have access to the following tools. To call a tool, output a JSON block in your response like this:\n```json\n{"name": "tool_name", "arguments": {"param": "value"}}\n```\nAvailable tools:\n';
+      const toolSchemas = getToolsSchema();
+      for (const t of toolSchemas) {
+        const fn = (t as any).function;
+        if (fn) {
+          const params = fn.parameters?.properties
+            ? Object.entries(fn.parameters.properties).map(([k, v]: [string, any]) => `${k}: ${v.type ?? 'any'}`).join(', ')
+            : '';
+          sessionMeta += `- ${fn.name}(${params}): ${fn.description ?? ''}\n`;
+        }
+      }
+      sessionMeta += '\nIMPORTANT: Output tool calls as JSON blocks in your message. Do NOT use the tool_calls API mechanism.\nIf you use XML/function tags (e.g. <function=name>), include a full JSON object of arguments between braces.';
+    } else {
+      sessionMeta += '\n\nIMPORTANT: Use the tool_calls mechanism to invoke tools. Do NOT write JSON tool invocations in your message text.';
+    }
+
+    // One-time tool-call template smoke test (first ask() call only, skip in content mode)
+    if (!client.contentModeToolCalls && !(client as any).__toolCallSmokeTested) {
+      (client as any).__toolCallSmokeTested = true;
+      try {
+        const smokeErr = await client.smokeTestToolCalls(cfg.model ?? 'default');
+        if (smokeErr) {
+          console.error(`\x1b[33m[warn] Tool-call smoke test failed: ${smokeErr}\x1b[0m`);
+          console.error(`\x1b[33m  This model/server may not support tool-call replay correctly.\x1b[0m`);
+          console.error(`\x1b[33m  Consider using a different model or updating llama.cpp.\x1b[0m`);
+        }
+      } catch {}
+    }
   }
   if (harness.systemPromptSuffix) {
     sessionMeta += '\n\n' + harness.systemPromptSuffix;
@@ -2688,13 +2740,20 @@ export async function createSession(opts: {
                 consecutiveCounts.set(sig, 1);
               }
               const consec = consecutiveCounts.get(sig) ?? 1;
-              if (consec >= 4) {
+              if (consec >= 3) {
                 const args = sig.slice(toolName.length + 1);
                 const argsPreview = args.length > 220 ? args.slice(0, 220) + '…' : args;
                 messages.push({
                   role: 'user' as const,
-                  content: `[System] You have read the same resource ${consec} consecutive times (${toolName} ${argsPreview}). The content has not changed. Please proceed with your task using the information you already have.`,
+                  content: `[System] STOP READING: You have read the same resource ${consec} consecutive times (${toolName} ${argsPreview}). The content has NOT changed. You already have this data. Proceed immediately with your next action (write_file, edit_file, exec, etc.) — do NOT read this resource again.`,
                 });
+              }
+              // Hard-break: after 6 consecutive identical reads, stop the session
+              if (consec >= 6) {
+                throw new Error(
+                  `tool ${toolName}: identical read repeated ${consec}x consecutively; breaking loop. ` +
+                  `The resource content has not changed between reads.`
+                );
               }
               continue;
             }
@@ -3359,4 +3418,34 @@ async function autoPickModel(client: OpenAIClient, cached?: { data: Array<{ id: 
   } finally {
     clearTimeout(timer);
   }
+}
+
+
+
+function parseFunctionTagToolCalls(content: string): ToolCall[] | null {
+  const m = content.match(/<function=([\w.-]+)>([\s\S]*?)<\/function>/i);
+  if (!m) return null;
+
+  const name = m[1];
+  const body = (m[2] ?? '').trim();
+
+  // If body contains JSON object, use it as arguments; else empty object.
+  let args = '{}';
+  const jsonStart = body.indexOf('{');
+  const jsonEnd = body.lastIndexOf('}');
+  if (jsonStart !== -1 && jsonEnd > jsonStart) {
+    const sub = body.slice(jsonStart, jsonEnd + 1);
+    try {
+      JSON.parse(sub);
+      args = sub;
+    } catch {
+      // keep {}
+    }
+  }
+
+  return [{
+    id: 'call_0',
+    type: 'function',
+    function: { name, arguments: args }
+  }];
 }
