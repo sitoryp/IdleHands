@@ -71,6 +71,69 @@ async function main() {
     process.exit(0);
   }
 
+
+  // ── Run-as user switching ──────────────────────────────────────
+  // Must happen before any config loading. Re-execs the entire process
+  // as the target user via sudo, after killing any existing IdleHands
+  // processes running under a different user.
+  const runAsArg = typeof args['run-as'] === 'string' ? args['run-as'] : undefined;
+  if (runAsArg || (!args['run-as'] && !args.version && !args.v && !args.help && !args.h)) {
+    // Check config for run_as_user if no CLI flag
+    let effectiveRunAs = runAsArg;
+    if (!effectiveRunAs) {
+      try {
+        const cfgPath = typeof args.config === 'string' ? args.config : defaultConfigPath();
+        const raw = fsSync.readFileSync(cfgPath, 'utf8');
+        const cfg = JSON.parse(raw);
+        if (cfg.run_as_user && typeof cfg.run_as_user === 'string') {
+          effectiveRunAs = cfg.run_as_user;
+        }
+      } catch {}
+    }
+
+    if (effectiveRunAs) {
+      const currentUser = os.userInfo().username;
+      if (currentUser !== effectiveRunAs) {
+        const { execSync, spawnSync } = await import('node:child_process');
+
+        // Kill any existing idlehands processes under the CURRENT user
+        // (we're switching away from current user to effectiveRunAs)
+        try {
+          execSync(`pgrep -u ${currentUser} -f 'node.*idlehands' | grep -vE '^(${process.pid}|${process.ppid})$' | xargs -r kill 2>/dev/null || true`, { stdio: 'ignore' });
+        } catch {}
+
+        // Also kill any stale idlehands processes under the TARGET user
+        // (clean slate for the new run)
+        try {
+          execSync(`sudo -n -u ${effectiveRunAs} bash -c "pgrep -f 'node.*idlehands' | xargs -r kill" 2>/dev/null || true`, { stdio: 'ignore' });
+        } catch {}
+
+        // Small delay to let processes die
+        try { execSync('sleep 0.5', { stdio: 'ignore' }); } catch {}
+
+        // Re-exec as target user, passing through all args except --run-as
+        const filteredArgs = process.argv.slice(2).filter((a, i, arr) => {
+          if (a === '--run-as') return false;
+          if (i > 0 && arr[i - 1] === '--run-as') return false;
+          if (a.startsWith('--run-as=')) return false;
+          return true;
+        });
+
+        const execPath = process.execPath;
+        const scriptPath = process.argv[1];
+        const cmdArgs = [scriptPath, ...filteredArgs];
+
+        console.log(`\x1b[2m  Switching to user: ${effectiveRunAs}\x1b[0m`);
+        const result = spawnSync('sudo', ['-u', effectiveRunAs, execPath, ...cmdArgs], {
+          stdio: 'inherit',
+          env: { ...process.env, HOME: '' },  // let sudo set HOME
+        });
+        process.exit(result.status ?? 1);
+      }
+    }
+  }
+
+
   if (args._[0] === 'upgrade' || args.upgrade) {
     const configPath = typeof args.config === 'string' ? args.config : defaultConfigPath();
     let source: InstallSource = 'github';
