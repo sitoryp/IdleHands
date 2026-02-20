@@ -183,6 +183,7 @@ Commands:
   service [action]           Manage bot background service (status|start|stop|restart|logs|install|uninstall)
 
 Options:
+  --run-as USER         Run as a different Linux user (re-execs via sudo)
   --endpoint URL
   --model NAME
   --dir PATH

@@ -724,6 +724,20 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
     const dir = await ask(rl, 'Path', currentDir);
     const resolvedDir = path.resolve(dir.replace(/^~/, process.env.HOME ?? '~'));
 
+
+    // ── 2b. Run-as User (optional) ────────────────────────────────
+
+    drawHeader('Step 2b — Run as User (optional)');
+
+    console.log(`  \${BOLD}Sandboxed execution\${RESET}`);
+    info('Run Idle Hands as a different Linux user for isolation.');
+    info('Leave blank to run as the current user.');
+    info('Requires sudo access to switch users.');
+    console.log();
+    const currentRunAs = existingConfig?.run_as_user || '';
+    const runAsUser = await ask(rl, 'Linux user (blank=current)', currentRunAs);
+    const resolvedRunAs = runAsUser.trim() || '';
+
     // ── 3. Approval mode ──────────────────────────────────────────
 
     drawHeader('Step 3 of 7 — Approval Mode');
@@ -873,6 +887,9 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
       console.log(`  Endpoint:      ${DIM}(will be set when a model is started)${RESET}`);
     }
     console.log(`  Directory:     ${CYAN}${resolvedDir}${RESET}`);
+    if (resolvedRunAs) {
+      console.log(`  Run as user:   ${CYAN}${resolvedRunAs}${RESET}`);
+    }
     console.log(`  Approval mode: ${CYAN}${approvalMode}${RESET}`);
     console.log(`  Sub-agents:    ${subAgentsEnabled ? `${GREEN}enabled${RESET} ${DIM}(${subMaxIter} iters, ${subTimeoutSec}s timeout, ${subMaxTokens} tokens)${RESET}` : `${YELLOW}disabled${RESET}`}`);
     console.log(`  Theme:         ${CYAN}${theme}${RESET}`);
@@ -893,6 +910,7 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
       finalConfig.endpoint = endpoint;
       finalConfig.model = '';
       finalConfig.dir = resolvedDir;
+      if (resolvedRunAs) finalConfig.run_as_user = resolvedRunAs;
       finalConfig.approval_mode = approvalMode;
       finalConfig.no_confirm = approvalMode === 'yolo';
       finalConfig.response_timeout = responseTimeout;

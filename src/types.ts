@@ -231,6 +231,8 @@ export type IdlehandsConfig = {
   bot?: BotConfig;
 
   // Upgrade / connectivity
+  // Run-as user (Linux user switching)
+  run_as_user?: string;
   install_source?: 'github' | 'npm' | 'unknown';
   auto_update_check?: boolean;
   offline?: boolean;
