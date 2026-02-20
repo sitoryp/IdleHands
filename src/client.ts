@@ -1,4 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import fsSync from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { ChatCompletionResponse, ChatMessage, ModelsResponse, ToolSchema } from './types.js';
 
 export type ClientError = Error & {
@@ -161,20 +164,71 @@ export class OpenAIClient {
   contentModeToolCalls = false;
 
   /**
-   * Model name patterns known to need content-mode tool calls.
-   * These models use Jinja templates that apply |items on string arguments,
-   * which is incompatible with OpenAI's tool_calls JSON format.
-   * Patterns are matched case-insensitively against the model filename.
+   * Built-in model name patterns known to need content-mode tool calls.
+   * Can be extended dynamically via ~/.config/idlehands/compat-models.json
    */
   static readonly CONTENT_MODE_PATTERNS: RegExp[] = [
-    /qwen3\.5.*397b/i,         // Qwen3.5-397B variants (Hermes 2 Pro fallback)
-    /qwen3\.5.*moe/i,          // Other Qwen3.5 MoE variants
-    // Add new patterns here as they are discovered
+    /qwen3\.5.*397b/i,
+    /qwen3\.5.*moe/i,
   ];
 
-  /** Check if a model name matches known content-mode patterns. */
+  /** Telemetry counters for compatibility behavior. */
+  private compatTelemetry = {
+    knownPatternMatches: 0,
+    autoSwitches: 0,
+  };
+
+  private static dynamicPatternsCache: { patterns: RegExp[]; loadedAt: number } | null = null;
+
+  private static loadDynamicCompatPatterns(): RegExp[] {
+    try {
+      const now = Date.now();
+      if (OpenAIClient.dynamicPatternsCache && now - OpenAIClient.dynamicPatternsCache.loadedAt < 30_000) {
+        return OpenAIClient.dynamicPatternsCache.patterns;
+      }
+
+      const cfgPath = path.join(os.homedir(), '.config', 'idlehands', 'compat-models.json');
+      if (!fsSync.existsSync(cfgPath)) {
+        OpenAIClient.dynamicPatternsCache = { patterns: [], loadedAt: now };
+        return [];
+      }
+
+      const raw = fsSync.readFileSync(cfgPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      const arr = Array.isArray(parsed?.content_mode_patterns)
+        ? parsed.content_mode_patterns
+        : Array.isArray(parsed)
+          ? parsed
+          : [];
+
+      const patterns = arr
+        .filter((x: any) => typeof x === 'string' && x.trim().length)
+        .map((x: string) => new RegExp(x, 'i'));
+
+      OpenAIClient.dynamicPatternsCache = { patterns, loadedAt: now };
+      return patterns;
+    } catch {
+      return [];
+    }
+  }
+
+  /** Check if a model name matches built-in or dynamic content-mode patterns. */
   static needsContentMode(modelName: string): boolean {
-    return OpenAIClient.CONTENT_MODE_PATTERNS.some(p => p.test(modelName));
+    const dynamic = OpenAIClient.loadDynamicCompatPatterns();
+    return [...OpenAIClient.CONTENT_MODE_PATTERNS, ...dynamic].some(p => p.test(modelName));
+  }
+
+
+  recordKnownPatternMatch(): void {
+    this.compatTelemetry.knownPatternMatches += 1;
+  }
+
+  getCompatTelemetry(): { knownPatternMatches: number; autoSwitches: number; contentModeActive: boolean } {
+    return {
+      knownPatternMatches: this.compatTelemetry.knownPatternMatches,
+      autoSwitches: this.compatTelemetry.autoSwitches,
+      contentModeActive: this.contentModeToolCalls,
+    };
   }
 
   constructor(
@@ -612,6 +666,7 @@ export class OpenAIClient {
           this.log('Detected tool-call template incompatibility (|items on String) — switching to content-mode tool calls');
           console.warn('[warn] Server template cannot handle tool_calls format. Switching to content-mode (tools in system prompt).');
           this.contentModeToolCalls = true;
+          this.compatTelemetry.autoSwitches += 1;
           // Retry immediately with content mode (tools stripped from body)
           return this.chatStream(opts);
         }
