@@ -36,7 +36,14 @@ export function splitDiscord(text: string, limit = 1900): string[] {
 
 export function safeContent(text: string): string {
   const t = sanitizeBotOutputText(text).trim();
-  return t.length ? t : '(empty response)';
+  if (t.length) return t;
+
+  // Provide informative fallback based on context
+  // If we have some content but it was all stripped, mention that
+  if (text && text.trim().length) {
+    return '(response contained only protocol artifacts - no user-visible content)';
+  }
+  return '(no response generated - task may be complete or awaiting further input)';
 }
 
 /**
