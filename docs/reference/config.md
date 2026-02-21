@@ -27,6 +27,7 @@ idlehands setup
 - `mcp_tool_budget`, `mcp_call_timeout_sec`
 - `watchdog_timeout_ms`, `watchdog_max_compactions`, `watchdog_idle_grace_timeouts`
 - `debug_abort_reason`
+- `hooks.enabled`, `hooks.strict`, `hooks.warn_ms`, `hooks.plugin_paths`
 
 ## Structured sections
 
@@ -82,6 +83,22 @@ list entirely. The model works in single-agent mode.
   "servers": []
 }
 ```
+
+### `hooks`
+
+```json
+"hooks": {
+  "enabled": true,
+  "strict": false,
+  "warn_ms": 250,
+  "plugin_paths": [
+    "./dist/hooks/plugins/example-console.js"
+  ]
+}
+```
+
+Use hooks to extend session/model/tool lifecycle behavior without modifying core files.
+See [Guide → Hooks & Plugins](/guide/hooks) for payloads and plugin examples.
 
 ### `bot`
 

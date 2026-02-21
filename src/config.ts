@@ -44,6 +44,12 @@ const DEFAULTS: IdlehandsConfig = {
   watchdog_max_compactions: 3,
   watchdog_idle_grace_timeouts: 1,
   debug_abort_reason: false,
+  hooks: {
+    enabled: true,
+    strict: false,
+    plugin_paths: [],
+    warn_ms: 250,
+  },
   trifecta: {
     enabled: true,
     vault: { enabled: true },
@@ -112,6 +118,15 @@ function parseNum(v: string | undefined): number | undefined {
   if (v == null || v.trim() === '') return undefined;
   const n = Number(v);
   return Number.isFinite(n) ? n : undefined;
+}
+
+function parseCsv(v: string | undefined): string[] | undefined {
+  if (v == null) return undefined;
+  const values = v
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return values.length ? values : undefined;
 }
 
 function parseTrifectaMode(v: string | undefined): 'active' | 'passive' | 'off' | undefined {
@@ -217,6 +232,12 @@ export async function loadConfig(opts: {
     watchdog_max_compactions: parseNum(process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS),
     watchdog_idle_grace_timeouts: parseNum(process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS),
     debug_abort_reason: parseBool(process.env.IDLEHANDS_DEBUG_ABORT_REASON ?? process.env.IDLEHANDS_DEBUG_CANCEL_REASON),
+    hooks: {
+      enabled: parseBool(process.env.IDLEHANDS_HOOKS_ENABLED),
+      strict: parseBool(process.env.IDLEHANDS_HOOKS_STRICT),
+      plugin_paths: parseCsv(process.env.IDLEHANDS_HOOK_PLUGIN_PATHS),
+      warn_ms: parseNum(process.env.IDLEHANDS_HOOK_WARN_MS),
+    },
     auto_update_check: parseBool(process.env.IDLEHANDS_AUTO_UPDATE_CHECK),
     offline: parseBool(process.env.IDLEHANDS_OFFLINE),
     lsp: {
@@ -337,6 +358,17 @@ export async function loadConfig(opts: {
     ...stripUndef(cliSubAgents ?? {}),
   };
 
+  // Hooks: shallow merge (defaults < file < env < cli)
+  const fileHooks = (fileCfg as any).hooks;
+  const envHooks = (envCfg as any).hooks;
+  const cliHooks = (cliCfg as any).hooks;
+  merged.hooks = {
+    ...(DEFAULTS.hooks ?? {}),
+    ...stripUndef(fileHooks ?? {}),
+    ...stripUndef(envHooks ?? {}),
+    ...stripUndef(cliHooks ?? {}),
+  };
+
   // merge order: defaults < file < env < cli
 
   // Normalize
@@ -375,6 +407,18 @@ export async function loadConfig(opts: {
     : [];
   if (typeof merged.lsp.diagnostic_severity_threshold === 'number') {
     merged.lsp.diagnostic_severity_threshold = Math.max(1, Math.min(4, Math.floor(merged.lsp.diagnostic_severity_threshold)));
+  }
+
+  merged.hooks = merged.hooks && typeof merged.hooks === 'object' ? merged.hooks : {};
+  const hooksEnabled = parseBoolLike(merged.hooks.enabled);
+  if (hooksEnabled !== undefined) merged.hooks.enabled = hooksEnabled;
+  const hooksStrict = parseBoolLike(merged.hooks.strict);
+  if (hooksStrict !== undefined) merged.hooks.strict = hooksStrict;
+  merged.hooks.plugin_paths = Array.isArray(merged.hooks.plugin_paths)
+    ? merged.hooks.plugin_paths.map((x: any) => String(x).trim()).filter(Boolean)
+    : [];
+  if (typeof merged.hooks.warn_ms === 'number') {
+    merged.hooks.warn_ms = Math.max(0, Math.floor(merged.hooks.warn_ms));
   }
 
   const subAgentsEnabled = parseBoolLike(merged.sub_agents.enabled);

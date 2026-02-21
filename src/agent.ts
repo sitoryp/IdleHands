@@ -4,6 +4,7 @@ import { enforceContextBudget, stripThinking, estimateTokensFromMessages, estima
 import * as tools from './tools.js';
 import { selectHarness, type Harness } from './harnesses.js';
 import { BASE_MAX_TOKENS, deriveContextWindow, deriveGenerationParams, supportsVisionModel } from './model-customization.js';
+import { HookManager, loadHookPlugins, type HookSystemConfig } from './hooks/index.js';
 import { checkExecSafety, checkPathSafety } from './safety.js';
 import { loadProjectContext } from './context.js';
 import { loadGitContext, isGitDirty, stashWorkingTree } from './git.js';
@@ -1106,6 +1107,7 @@ export type AgentRuntime = {
   vault?: VaultStore;
   replay?: ReplayStore;
   lens?: LensStore;
+  hookManager?: HookManager;
 };
 
 export type AgentHooks = {
@@ -1213,6 +1215,7 @@ export type AgentSession = {
   replay?: ReplayStore;
   vault?: VaultStore;
   lens?: LensStore;
+  hookManager?: HookManager;
   lastEditedPath?: string;
   lastTurnMetrics?: TurnPerformance;
   lastServerHealth?: ServerHealthSnapshot;
@@ -1268,6 +1271,47 @@ export async function createSession(opts: {
     modelMeta,
   });
   let supportsVision = supportsVisionModel(model, modelMeta, harness);
+
+  const sessionId = `session-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const hookCfg: HookSystemConfig = cfg.hooks ?? {};
+  const hookManager = opts.runtime?.hookManager ?? new HookManager({
+    enabled: hookCfg.enabled !== false,
+    strict: hookCfg.strict === true,
+    warnMs: hookCfg.warn_ms,
+    context: () => ({
+      sessionId,
+      cwd: cfg.dir ?? process.cwd(),
+      model,
+      harness: harness.id,
+      endpoint: cfg.endpoint,
+    }),
+  });
+
+  const emitDetached = (promise: Promise<void>, eventName: string) => {
+    void promise.catch((error: any) => {
+      if (!process.env.IDLEHANDS_QUIET_WARNINGS) {
+        console.warn(`[hooks] async ${eventName} dispatch failed: ${error?.message ?? String(error)}`);
+      }
+    });
+  };
+
+  if (!opts.runtime?.hookManager && hookManager.isEnabled()) {
+    const loadedPlugins = await loadHookPlugins({
+      pluginPaths: Array.isArray(hookCfg.plugin_paths) ? hookCfg.plugin_paths : [],
+      cwd: cfg.dir ?? process.cwd(),
+      strict: hookCfg.strict === true,
+    });
+    for (const loaded of loadedPlugins) {
+      await hookManager.registerPlugin(loaded.plugin, loaded.path);
+    }
+  }
+
+  await hookManager.emit('session_start', {
+    model,
+    harness: harness.id,
+    endpoint: cfg.endpoint,
+    cwd: cfg.dir ?? process.cwd(),
+  });
 
   if (!cfg.i_know_what_im_doing && contextWindow > 131072) {
     console.warn('[warn] context_window is above 131072; this can increase memory usage and hurt throughput. Use --i-know-what-im-doing to proceed.');
@@ -2194,6 +2238,7 @@ export async function createSession(opts: {
   };
 
   const setModel = (name: string) => {
+    const previousModel = model;
     model = name;
     harness = selectHarness(model, cfg.harness && cfg.harness.trim() ? cfg.harness.trim() : undefined);
     const nextMeta = modelsList?.data?.find((m: any) => m.id === model);
@@ -2213,6 +2258,12 @@ export async function createSession(opts: {
       configuredTopP: cfg.top_p,
       baseMaxTokens: BASE_MAX_TOKENS,
     }));
+
+    emitDetached(hookManager.emit('model_changed', {
+      previousModel,
+      nextModel: model,
+      harness: harness.id,
+    }), 'model_changed');
   };
 
   const setEndpoint = async (endpoint: string, modelName?: string): Promise<void> => {
@@ -2424,7 +2475,30 @@ export async function createSession(opts: {
     let turns = 0;
     let toolCalls = 0;
 
+    const askId = `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const emitToolCall = async (call: ToolCallEvent): Promise<void> => {
+      hookObj.onToolCall?.(call);
+      await hookManager.emit('tool_call', { askId, turn: turns, call });
+    };
+
+    const emitToolResult = async (result: ToolResultEvent): Promise<void> => {
+      await hookObj.onToolResult?.(result);
+      await hookManager.emit('tool_result', { askId, turn: turns, result });
+    };
+
+    const emitTurnEnd = async (stats: TurnEndEvent): Promise<void> => {
+      await hookObj.onTurnEnd?.(stats);
+      await hookManager.emit('turn_end', { askId, stats });
+    };
+
+    const finalizeAsk = async (text: string): Promise<AgentResult> => {
+      await hookManager.emit('ask_end', { askId, text, turns, toolCalls });
+      return { text, turns, toolCalls };
+    };
+
     const rawInstructionText = userContentToText(instruction).trim();
+    await hookManager.emit('ask_start', { askId, instruction: rawInstructionText });
     const projectDir = cfg.dir ?? process.cwd();
     const reviewKeys = reviewArtifactKeys(projectDir);
     const retrievalRequested = looksLikeReviewRetrievalRequest(rawInstructionText);
@@ -2450,13 +2524,13 @@ export async function createSession(opts: {
 
           messages.push({ role: 'assistant', content: blocked });
           hookObj.onToken?.(blocked);
-          await hookObj.onTurnEnd?.({
+          await emitTurnEnd({
             turn: turns,
             toolCalls,
             promptTokens: cumulativeUsage.prompt,
             completionTokens: cumulativeUsage.completion,
           });
-          return { text: blocked, turns, toolCalls };
+          return await finalizeAsk(blocked);
         }
 
         const text = stale
@@ -2465,25 +2539,25 @@ export async function createSession(opts: {
 
         messages.push({ role: 'assistant', content: text });
         hookObj.onToken?.(text);
-        await hookObj.onTurnEnd?.({
+        await emitTurnEnd({
           turn: turns,
           toolCalls,
           promptTokens: cumulativeUsage.prompt,
           completionTokens: cumulativeUsage.completion,
         });
-        return { text, turns, toolCalls };
+        return await finalizeAsk(text);
       }
 
       const miss = 'No stored full code review found yet. Ask me to run a code review first, then I can replay it verbatim.';
       messages.push({ role: 'assistant', content: miss });
       hookObj.onToken?.(miss);
-      await hookObj.onTurnEnd?.({
+      await emitTurnEnd({
         turn: turns,
         toolCalls,
         promptTokens: cumulativeUsage.prompt,
         completionTokens: cumulativeUsage.completion,
       });
-      return { text: miss, turns, toolCalls };
+      return await finalizeAsk(miss);
     }
 
     const persistReviewArtifact = async (finalText: string): Promise<void> => {
@@ -2630,6 +2704,7 @@ export async function createSession(opts: {
         if (inFlight?.signal?.aborted) break;
 
         turns++;
+        await hookManager.emit('turn_start', { askId, turn: turns });
 
         const wallElapsed = (Date.now() - wallStart) / 1000;
         if (wallElapsed > cfg.timeout) {
@@ -2855,7 +2930,7 @@ export async function createSession(opts: {
             role: 'user',
             content: '[system] Your previous response was empty (no text, no tool calls). Continue by either calling a tool with valid JSON arguments or giving a final answer.',
           });
-          await hookObj.onTurnEnd?.({
+          await emitTurnEnd({
             turn: turns,
             toolCalls,
             promptTokens: cumulativeUsage.prompt,
@@ -3133,8 +3208,8 @@ export async function createSession(opts: {
 
               // Fix 1: Hard cumulative budget — refuse reads past hard cap
               if (cumulativeReadOnlyCalls > READ_BUDGET_HARD) {
-                hookObj.onToolCall?.({ id: callId, name, args });
-                hookObj.onToolResult?.({ id: callId, name, success: false, summary: 'read budget exhausted', result: '' });
+                await emitToolCall({ id: callId, name, args });
+                await emitToolResult({ id: callId, name, success: false, summary: 'read budget exhausted', result: '' });
                 return { id: callId, content: `STOP: Read budget exhausted (${cumulativeReadOnlyCalls}/${READ_BUDGET_HARD} calls). Do NOT read more files. Use search_files or exec: grep -rn "pattern" path/ to find what you need.` };
               }
 
@@ -3149,8 +3224,8 @@ export async function createSession(opts: {
                   blockedDirs.add(parentDir);
                 }
                 if (blockedDirs.has(parentDir) && uniqueCount > 8) {
-                  hookObj.onToolCall?.({ id: callId, name, args });
-                  hookObj.onToolResult?.({ id: callId, name, success: false, summary: 'dir scan blocked', result: '' });
+                  await emitToolCall({ id: callId, name, args });
+                  await emitToolResult({ id: callId, name, success: false, summary: 'dir scan blocked', result: '' });
                   return { id: callId, content: `STOP: Directory scan detected — you've read ${uniqueCount} unique files from ${parentDir}/. Use search_files(pattern, '${parentDir}') or exec: grep -rn "pattern" ${parentDir}/ instead of reading files individually.` };
                 }
               }
@@ -3161,8 +3236,8 @@ export async function createSession(opts: {
                 if (!searchTermFiles.has(key)) searchTermFiles.set(key, new Set());
                 searchTermFiles.get(key)!.add(filePath);
                 if (searchTermFiles.get(key)!.size >= 3) {
-                  hookObj.onToolCall?.({ id: callId, name, args });
-                  hookObj.onToolResult?.({ id: callId, name, success: false, summary: 'use search_files', result: '' });
+                  await emitToolCall({ id: callId, name, args });
+                  await emitToolResult({ id: callId, name, success: false, summary: 'use search_files', result: '' });
                   return { id: callId, content: `STOP: You've searched ${searchTermFiles.get(key)!.size} files for "${searchTerm}" one at a time. This is what search_files does in one call. Use: search_files(pattern="${searchTerm}", path=".") or exec: grep -rn "${searchTerm}" .` };
                 }
               }
@@ -3188,14 +3263,14 @@ export async function createSession(opts: {
               opts.confirmProvider?.showBlocked?.({ tool: name, args, reason: `plan mode: ${summary}` });
 
               // Hook: onToolCall + onToolResult for plan-blocked actions
-              hookObj.onToolCall?.({ id: callId, name, args });
-              hookObj.onToolResult?.({ id: callId, name, success: true, summary: `⏸ ${summary} (blocked)`, result: blockedMsg });
+              await emitToolCall({ id: callId, name, args });
+              await emitToolResult({ id: callId, name, success: true, summary: `⏸ ${summary} (blocked)`, result: blockedMsg });
 
               return { id: callId, content: blockedMsg };
             }
 
             // Hook: onToolCall (Phase 8.5)
-            hookObj.onToolCall?.({ id: callId, name, args });
+            await emitToolCall({ id: callId, name, args });
 
             if (cfg.step_mode) {
               const stepPrompt = `Step mode: execute ${name}(${JSON.stringify(args).slice(0, 200)}) ? [Y/n]`;
@@ -3329,7 +3404,7 @@ export async function createSession(opts: {
               } catch {}
             }
 
-            hookObj.onToolResult?.(resultEvent);
+            await emitToolResult(resultEvent);
 
             // Proactive LSP diagnostics after file mutations
             if (lspManager?.hasServers() && lspCfg?.proactive_diagnostics !== false) {
@@ -3360,7 +3435,7 @@ export async function createSession(opts: {
           const results: Array<{ id: string; content: string }> = [];
 
           // Helper: catch tool errors but re-throw AgentLoopBreak (those must break the outer loop)
-          const catchToolError = (e: any, tc: ToolCall) => {
+          const catchToolError = async (e: any, tc: ToolCall) => {
             if (e instanceof AgentLoopBreak) throw e;
             const msg = e?.message ?? String(e);
 
@@ -3394,7 +3469,7 @@ export async function createSession(opts: {
 
             // Hook: onToolResult for errors (Phase 8.5)
             const callId = resolveCallId(tc);
-            hookObj.onToolResult?.({ id: callId, name: tc.function.name, success: false, summary: msg || 'unknown error', result: `ERROR: ${msg || 'unknown error'}` });
+            await emitToolResult({ id: callId, name: tc.function.name, success: false, summary: msg || 'unknown error', result: `ERROR: ${msg || 'unknown error'}` });
             // Never return undefined error text; it makes bench failures impossible to debug.
             return { id: callId, content: `ERROR: ${msg || 'unknown tool error'}` };
           };
@@ -3443,7 +3518,7 @@ export async function createSession(opts: {
               try {
                 results.push(await runOne(tc));
               } catch (e: any) {
-                results.push(catchToolError(e, tc));
+                results.push(await catchToolError(e, tc));
               }
             }
           } else {
@@ -3454,7 +3529,7 @@ export async function createSession(opts: {
               try {
                 results.push(await runOne(tc));
               } catch (e: any) {
-                results.push(catchToolError(e, tc));
+                results.push(await catchToolError(e, tc));
               }
             }
           }
@@ -3503,7 +3578,7 @@ export async function createSession(opts: {
           }
 
           // Hook: onTurnEnd (Phase 8.5)
-          await hookObj.onTurnEnd?.({
+          await emitTurnEnd({
             turn: turns,
             toolCalls,
             promptTokens: cumulativeUsage.prompt,
@@ -3555,7 +3630,7 @@ export async function createSession(opts: {
                   `Call the needed tools directly. If everything is truly complete, provide the final answer.`
               });
 
-              await hookObj.onTurnEnd?.({
+              await emitTurnEnd({
                 turn: turns,
                 toolCalls,
                 promptTokens: cumulativeUsage.prompt,
@@ -3580,7 +3655,7 @@ export async function createSession(opts: {
             content: '[system] Continue executing the task. Use tools now (do not just narrate plans). If complete, give the final answer.'
           });
 
-          await hookObj.onTurnEnd?.({
+          await emitTurnEnd({
             turn: turns,
             toolCalls,
             promptTokens: cumulativeUsage.prompt,
@@ -3600,7 +3675,7 @@ export async function createSession(opts: {
         // final assistant message
         messages.push({ role: 'assistant', content: assistantText });
         await persistReviewArtifact(assistantText).catch(() => {});
-        await hookObj.onTurnEnd?.({
+        await emitTurnEnd({
           turn: turns,
           toolCalls,
           promptTokens: cumulativeUsage.prompt,
@@ -3612,7 +3687,7 @@ export async function createSession(opts: {
           ppTps,
           tgTps,
         });
-        return { text: assistantText, turns, toolCalls };
+        return await finalizeAsk(assistantText);
       }
 
       const reason = `max iterations exceeded (${maxIters})`;
@@ -3636,6 +3711,12 @@ export async function createSession(opts: {
         })();
         const err = new Error(`BUG: threw undefined in agent.ask() (turn=${turns}). lastMsg=${lastMsg?.role ?? 'unknown'}:${lastMsgPreview}`);
         await persistFailure(err, `ask turn ${turns}`);
+        await hookManager.emit('ask_error', {
+          askId,
+          error: err.message,
+          turns,
+          toolCalls,
+        });
         throw err;
       }
 
@@ -3646,8 +3727,22 @@ export async function createSession(opts: {
       }
       // Never rethrow undefined; normalize to Error for debuggability.
       if (e === undefined) {
-        throw new Error('BUG: threw undefined (normalized at ask() boundary)');
+        const normalized = new Error('BUG: threw undefined (normalized at ask() boundary)');
+        await hookManager.emit('ask_error', {
+          askId,
+          error: normalized.message,
+          turns,
+          toolCalls,
+        });
+        throw normalized;
       }
+
+      await hookManager.emit('ask_error', {
+        askId,
+        error: e instanceof Error ? e.message : String(e),
+        turns,
+        toolCalls,
+      });
       throw e;
     }
 
@@ -3696,6 +3791,7 @@ export async function createSession(opts: {
     replay,
     vault,
     lens,
+    hookManager,
     get lastEditedPath() {
       return lastEditedPath;
     },

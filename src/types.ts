@@ -138,6 +138,13 @@ export type TrifectaConfig = {
   };
 };
 
+export type HookSystemConfig = {
+  enabled?: boolean;
+  strict?: boolean;
+  plugin_paths?: string[];
+  warn_ms?: number;
+};
+
 export type IdlehandsConfig = {
   endpoint: string;
   model?: string;
@@ -205,6 +212,9 @@ export type IdlehandsConfig = {
 
   // Trifecta subsystems
   trifecta?: TrifectaConfig;
+
+  // Hook/plugin extension system
+  hooks?: HookSystemConfig;
 
   // LSP integration (Phase 17)
   lsp?: LspConfig;
