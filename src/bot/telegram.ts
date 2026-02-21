@@ -370,8 +370,15 @@ class StreamingMessage {
     if (this.toolLines.length) {
       out += `<pre>${escapeHtml(this.toolLines.join('\n'))}</pre>\n\n`;
     }
-    out += markdownToTelegramHtml(text);
-    return out || '(empty response)';
+    const sanitized = markdownToTelegramHtml(text);
+    if (sanitized.trim()) {
+      out += sanitized;
+    } else if (text && text.trim()) {
+      out += '<i>(response contained only protocol artifacts - no user-visible content)</i>';
+    } else {
+      out += '<i>(no response generated - task may be complete or awaiting further input)</i>';
+    }
+    return out;
   }
 
   /** Finalize with an error message. */

@@ -105,6 +105,16 @@ function readOnlyExecCacheable(content: string): boolean {
   }
 }
 
+function ensureInformativeAssistantText(text: string, ctx: { toolCalls: number; turns: number }): string {
+  if (String(text ?? '').trim()) return text;
+
+  if (ctx.toolCalls > 0) {
+    return 'I completed the requested tool work, but I have no user-visible response text yet. Ask me to summarize what was done.';
+  }
+
+  return `I have no user-visible response text for this turn (turn=${ctx.turns}). Please try again or rephrase your request.`;
+}
+
 /** Errors that should break the outer agent loop, not be caught by per-tool handlers */
 class AgentLoopBreak extends Error {
   constructor(message: string) {
@@ -1984,8 +1994,9 @@ export async function createSession(opts: {
     };
 
     const finalizeAsk = async (text: string): Promise<AgentResult> => {
-      await hookManager.emit('ask_end', { askId, text, turns, toolCalls });
-      return { text, turns, toolCalls };
+      const finalText = ensureInformativeAssistantText(text, { toolCalls, turns });
+      await hookManager.emit('ask_end', { askId, text: finalText, turns, toolCalls });
+      return { text: finalText, turns, toolCalls };
     };
 
     const rawInstructionText = userContentToText(instruction).trim();
@@ -3223,9 +3234,11 @@ export async function createSession(opts: {
 
         noToolTurns = 0;
 
+        const assistantOutput = ensureInformativeAssistantText(assistantText, { toolCalls, turns });
+
         // final assistant message
-        messages.push({ role: 'assistant', content: assistantText });
-        await persistReviewArtifact(assistantText).catch(() => {});
+        messages.push({ role: 'assistant', content: assistantOutput });
+        await persistReviewArtifact(assistantOutput).catch(() => {});
         await emitTurnEnd({
           turn: turns,
           toolCalls,
@@ -3238,7 +3251,7 @@ export async function createSession(opts: {
           ppTps,
           tgTps,
         });
-        return await finalizeAsk(assistantText);
+        return await finalizeAsk(assistantOutput);
       }
 
       const reason = `max iterations exceeded (${maxIters})`;

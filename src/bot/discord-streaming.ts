@@ -157,8 +157,22 @@ export class DiscordStreamingMessage {
 
     const snap = this.progress.snapshot('stop');
     const toolLines = snap.toolLines.slice(-8);
-    const combined = safeContent((toolLines.length ? toolLines.join('\n') + '\n\n' : '') + (finalText ?? ''));
-    const chunks = splitDiscord(combined);
+
+    // Build combined text with informative fallback
+    let combined = '';
+    if (toolLines.length) {
+      combined += toolLines.join('\n') + '\n\n';
+    }
+
+    if (finalText && finalText.trim()) {
+      combined += finalText;
+    } else if (finalText) {
+      combined += '*(response contained only protocol artifacts - no user-visible content)*';
+    } else {
+      combined += '*(no response generated - task may be complete or awaiting further input)*';
+    }
+
+    const chunks = splitDiscord(safeContent(combined));
 
     if (this.placeholder && chunks.length > 0) {
       await this.placeholder.edit(chunks[0]).catch(() => {});
