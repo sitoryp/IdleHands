@@ -98,6 +98,75 @@ function isImageBuffer(buf: Buffer): boolean {
   return false;
 }
 
+/** Enhanced path validation for security */
+function validateImagePath(imagePath: string, ctx: ToolContext): { valid: boolean; error?: string; sanitizedPath?: string } {
+  // Sanitize input path
+  const trimmed = imagePath.trim();
+  if (!trimmed) {
+    return { valid: false, error: 'Path cannot be empty' };
+  }
+
+  // Check for dangerous patterns
+  const dangerousPatterns = [
+    /\.\./,                         // Path traversal
+    /\/etc\//,                     // System paths
+    /\/proc\//,                    // Process filesystem
+    /\/sys\//,                     // System filesystem
+    /\/dev\//,                     // Device files
+    /\/var\/log\//,                // Log files
+    /\/root\//,                    // Root home
+    /\/home\/[^/]+\/\.ssh\//,      // SSH keys
+    /^\/[^\/]*$/,                  // Root-level files
+    /\.\.[\\/]/,                   // Windows-style traversal
+    /%2e%2e/i,                     // URL encoded traversal
+    /\\.\\.[\\/]/,                 // Mixed separators
+    /[Cc]:\\[Ww]indows/,          // Windows system paths
+    /[Cc]:\\[Uu]sers\\[^\\]+\\AppData/, // Windows user data
+    /system32/i,                   // Windows system32
+    /config\\sam/i,                // Windows SAM file
+    /\.ssh\//,                     // SSH directories
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(trimmed)) {
+      return { valid: false, error: 'Path contains potentially unsafe patterns' };
+    }
+  }
+
+  try {
+    const absPath = path.resolve(ctx.cwd, trimmed);
+    const pathSafety = checkPathSafety(absPath);
+    
+    if (pathSafety.tier === 'forbidden') {
+      return { valid: false, error: 'Access denied to protected path' };
+    }
+
+    return { valid: true, sanitizedPath: trimmed };
+  } catch {
+    return { valid: false, error: 'Invalid path format' };
+  }
+}
+
+/** Sanitize error messages to prevent information disclosure */
+function sanitizeErrorMessage(error: string, originalPath?: string): string {
+  // Remove sensitive path information
+  let sanitized = error;
+  
+  // Remove absolute paths
+  sanitized = sanitized.replace(/\/[^\s"']+/g, '<path>');
+  sanitized = sanitized.replace(/C:\\[^\s"']+/g, '<path>');
+  
+  // Remove specific usernames/directories
+  sanitized = sanitized.replace(/\/home\/[^\s\/]+/g, '/home/<user>');
+  sanitized = sanitized.replace(/\/Users\/[^\s\/]+/g, '/Users/<user>');
+  
+  // Remove system-specific details
+  sanitized = sanitized.replace(/ENOENT: no such file or directory, stat '[^']+'/g, 'File not found');
+  sanitized = sanitized.replace(/EACCES: permission denied, [^,]+, '[^']+'/g, 'Access denied');
+  
+  return sanitized;
+}
+
 /** Parse base64 data URL or raw base64 string */
 function parseBase64Data(data: string): { mimeType: string; buffer: Buffer } | null {
   try {
@@ -1261,20 +1330,20 @@ export async function read_image(ctx: ToolContext, args: any) {
     let sourcePath: string | undefined;
     
     if (hasPath) {
-      // Handle file path
-      const absPath = path.resolve(ctx.cwd, args.path);
-      
-      // Security check
-      const pathSafety = checkPathSafety(absPath);
-      if (pathSafety.tier === 'forbidden') {
-        return `ERROR: ${pathSafety.reason || 'Protected path'}`;
+      // Enhanced path validation
+      const pathValidation = validateImagePath(args.path, ctx);
+      if (!pathValidation.valid) {
+        return `ERROR: ${pathValidation.error}`;
       }
+      
+      const sanitizedPath = pathValidation.sanitizedPath!;
+      const absPath = path.resolve(ctx.cwd, sanitizedPath);
       
       // Check if file exists and is readable
       try {
         const stat = await fs.stat(absPath);
         if (!stat.isFile()) {
-          return `ERROR: "${args.path}" is not a file`;
+          return 'ERROR: Specified path is not a valid file';
         }
         
         if (stat.size > maxImageBytes) {
@@ -1283,19 +1352,30 @@ export async function read_image(ctx: ToolContext, args: any) {
           return `ERROR: Image too large (${sizeMB}MB, max ${maxMB}MB)`;
         }
       } catch (e: any) {
-        return `ERROR: Cannot access "${args.path}": ${e?.message ?? e}`;
+        const sanitizedError = sanitizeErrorMessage(e?.message ?? String(e), args.path);
+        return `ERROR: ${sanitizedError}`;
       }
       
       // Read file
       try {
         imageBuffer = await fs.readFile(absPath);
         originalMimeType = guessMimeType(absPath, imageBuffer);
-        sourcePath = args.path;
+        sourcePath = sanitizedPath;
       } catch (e: any) {
-        return `ERROR: Cannot read "${args.path}": ${e?.message ?? e}`;
+        const sanitizedError = sanitizeErrorMessage(e?.message ?? String(e), args.path);
+        return `ERROR: Cannot read image file: ${sanitizedError}`;
       }
     } else {
-      // Handle base64 data
+      // Handle base64 data with enhanced validation
+      
+      // Check base64 data size before parsing (estimate)
+      const estimatedSize = (args.data.length * 3) / 4; // Base64 overhead
+      if (estimatedSize > maxImageBytes) {
+        const sizeMB = (estimatedSize / 1024 / 1024).toFixed(1);
+        const maxMB = (maxImageBytes / 1024 / 1024).toFixed(1);
+        return `ERROR: Image too large (${sizeMB}MB, max ${maxMB}MB)`;
+      }
+      
       const parsed = parseBase64Data(args.data);
       if (!parsed) {
         return 'ERROR: Invalid base64 data format';
@@ -1304,6 +1384,7 @@ export async function read_image(ctx: ToolContext, args: any) {
       imageBuffer = parsed.buffer;
       originalMimeType = parsed.mimeType;
       
+      // Double-check actual buffer size
       if (imageBuffer.length > maxImageBytes) {
         const sizeMB = (imageBuffer.length / 1024 / 1024).toFixed(1);
         const maxMB = (maxImageBytes / 1024 / 1024).toFixed(1);
