@@ -15,6 +15,7 @@ import type { ApprovalMode, BotDiscordConfig, IdlehandsConfig, AgentPersona, Age
 import { DiscordConfirmProvider } from './confirm-discord.js';
 import { sanitizeBotOutputText } from './format.js';
 import { projectDir } from '../utils.js';
+import { WATCHDOG_RECOMMENDED_TUNING_TEXT, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../watchdog.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { runAnton } from '../anton/controller.js';
@@ -287,10 +288,11 @@ export async function startDiscordBot(config: IdlehandsConfig, botConfig: BotDis
   const approvalMode = normalizeApprovalMode(botConfig.approval_mode, config.approval_mode ?? 'auto-edit');
   const defaultDir = botConfig.default_dir || projectDir(config);
   const replyToUserMessages = botConfig.reply_to_user_messages === true;
-  const watchdogMs = Math.max(30_000, Math.floor(botConfig.watchdog_timeout_ms ?? config.watchdog_timeout_ms ?? 120_000));
-  const maxWatchdogCompacts = Math.max(0, Math.floor(botConfig.watchdog_max_compactions ?? config.watchdog_max_compactions ?? 3));
-  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(botConfig.watchdog_idle_grace_timeouts ?? config.watchdog_idle_grace_timeouts ?? 1));
-  const debugAbortReason = (botConfig.debug_abort_reason ?? config.debug_abort_reason) === true;
+  const watchdogSettings = resolveWatchdogSettings(botConfig, config);
+  const watchdogMs = watchdogSettings.timeoutMs;
+  const maxWatchdogCompacts = watchdogSettings.maxCompactions;
+  const watchdogIdleGraceTimeouts = watchdogSettings.idleGraceTimeouts;
+  const debugAbortReason = watchdogSettings.debugAbortReason;
 
   const sessions = new Map<string, ManagedSession>();
 
@@ -318,13 +320,9 @@ export async function startDiscordBot(config: IdlehandsConfig, botConfig: BotDis
       `Debug abort reason: ${debugAbortReason ? 'on' : 'off'}`,
     ];
 
-    const aggressive =
-      (watchdogMs <= 90_000 && watchdogIdleGraceTimeouts === 0) ||
-      watchdogMs <= 60_000 ||
-      maxWatchdogCompacts === 0;
-    if (aggressive) {
+    if (shouldRecommendWatchdogTuning(watchdogSettings)) {
       lines.push('');
-      lines.push('Recommended tuning: watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.');
+      lines.push(`Recommended tuning: ${WATCHDOG_RECOMMENDED_TUNING_TEXT}`);
     }
 
     if (managed) {
