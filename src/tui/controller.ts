@@ -4,17 +4,18 @@ import type { TranscriptItem } from "./types.js";
 import { decodeRawInput, resolveAction } from "./keymap.js";
 import { createInitialTuiState, reduceTuiState } from "./state.js";
 import { renderTui, setRenderTheme } from "./render.js";
+import { calculateLayout } from "./layout.js";
 import { enterFullScreen, leaveFullScreen } from "./screen.js";
 import { saveSessionFile, lastSessionPath, projectSessionPath } from "../cli/session-state.js";
 import { loadBranches, executeBranchSelect } from "./branch-picker.js";
 import { ensureCommandsRegistered, allCommandNames, runShellCommand, runSlashCommand } from "./command-handler.js";
 import { projectDir } from "../utils.js";
 import { formatWatchdogCancelMessage, resolveWatchdogSettings } from "../watchdog.js";
-import type { TuiState } from "./types.js";
+import type { SettingsMenuItem, StepNavigatorItem, TuiState } from "./types.js";
 import { TuiConfirmProvider } from "./confirm.js";
 
-/** Commands that need special TUI handling instead of the registry adapter. */
-const TUI_OVERRIDES = new Set(['/quit', '/exit', '/clear', '/help', '/branches']);
+const THEME_OPTIONS = ['default', 'dark', 'light', 'minimal', 'hacker'] as const;
+const APPROVAL_OPTIONS = ['plan', 'default', 'auto-edit', 'yolo'] as const;
 
 export class TuiController {
   private state = createInitialTuiState();
@@ -63,7 +64,7 @@ export class TuiController {
       this.tabIndex = -1;
       const names = allCommandNames();
       // Add TUI-specific commands that aren't in the registry
-      const extra = ['/quit', '/exit', '/clear', '/help'];
+      const extra = ['/quit', '/exit', '/clear', '/help', '/branches', '/steps', '/settings'];
       const all = [...new Set([...names, ...extra])];
       this.tabCandidates = all.filter(n => n.toLowerCase().startsWith(prefix)).sort();
     }
@@ -104,6 +105,179 @@ export class TuiController {
       if (result.ok) this.pushSystemMessage(result.message);
       else this.dispatch({ type: 'ALERT_PUSH', id: `br_${Date.now()}`, level: result.level ?? 'error', text: result.message });
     }
+  }
+
+  private transcriptLineStarts(): number[] {
+    const starts: number[] = [];
+    let line = 0;
+    for (const item of this.state.transcript) {
+      starts.push(line);
+      const chunks = String(item.text ?? '').split('\n');
+      line += Math.max(1, chunks.length);
+    }
+    return starts;
+  }
+
+  private buildStepNavigatorItems(query?: string): StepNavigatorItem[] {
+    const q = (query ?? '').trim().toLowerCase();
+    const starts = this.transcriptLineStarts();
+    const items: StepNavigatorItem[] = this.state.transcript.map((item, idx) => {
+      const preview = String(item.text ?? '').split(/\r?\n/)[0]?.trim() ?? '';
+      return {
+        id: item.id,
+        ts: item.ts,
+        role: item.role,
+        preview,
+        lineStart: starts[idx] ?? 0,
+      };
+    });
+
+    if (!q) return items;
+    return items.filter((it) => (`${it.role} ${it.preview}`).toLowerCase().includes(q));
+  }
+
+  private openStepNavigator(query = ''): void {
+    const items = this.buildStepNavigatorItems(query);
+    this.dispatch({ type: 'STEP_NAV_OPEN', items, query });
+  }
+
+  private stepNavigatorQueryAppend(text: string): void {
+    const current = this.state.stepNavigator?.query ?? '';
+    const next = `${current}${text}`;
+    this.openStepNavigator(next);
+  }
+
+  private stepNavigatorQueryBackspace(): void {
+    const current = this.state.stepNavigator?.query ?? '';
+    const next = current.slice(0, -1);
+    this.openStepNavigator(next);
+  }
+
+  private jumpToStepSelection(): void {
+    const nav = this.state.stepNavigator;
+    if (!nav?.items.length) {
+      this.dispatch({ type: 'STEP_NAV_CLOSE' });
+      return;
+    }
+
+    const selected = nav.items[nav.selectedIndex];
+    if (!selected) {
+      this.dispatch({ type: 'STEP_NAV_CLOSE' });
+      return;
+    }
+
+    const layout = calculateLayout(process.stdout.rows ?? 30, process.stdout.columns ?? 120);
+    const starts = this.transcriptLineStarts();
+    const totalLines = starts.length
+      ? (starts[starts.length - 1] ?? 0) +
+        Math.max(1, String(this.state.transcript[this.state.transcript.length - 1]?.text ?? '').split('\n').length)
+      : 0;
+
+    const desiredStart = Math.max(0, Math.min(selected.lineStart, Math.max(0, totalLines - layout.transcriptRows)));
+    const scrollBack = Math.max(0, totalLines - (desiredStart + layout.transcriptRows));
+    this.dispatch({ type: 'SCROLL_SET', panel: 'transcript', value: scrollBack });
+    this.dispatch({ type: 'STEP_NAV_CLOSE' });
+    this.dispatch({ type: 'ALERT_PUSH', id: `step_${Date.now()}`, level: 'info', text: `Jumped to ${selected.role}: ${selected.preview || '(no preview)'}` });
+  }
+
+  private buildSettingsItems(): SettingsMenuItem[] {
+    const watchdog = resolveWatchdogSettings(undefined, this.config);
+    return [
+      {
+        key: 'theme',
+        label: 'Theme',
+        value: this.config.theme || 'default',
+        hint: 'Cycle TUI themes instantly.',
+      },
+      {
+        key: 'approval',
+        label: 'Approval mode',
+        value: this.config.approval_mode || 'default',
+        hint: 'Plan/default/auto-edit/yolo for next turns.',
+      },
+      {
+        key: 'watchdog_timeout',
+        label: 'Watchdog timeout',
+        value: `${watchdog.timeoutMs} ms`,
+        hint: 'Longer timeout helps with slower models.',
+      },
+      {
+        key: 'watchdog_compactions',
+        label: 'Max compactions',
+        value: String(watchdog.maxCompactions),
+        hint: 'Retries before watchdog cancellation.',
+      },
+      {
+        key: 'watchdog_grace',
+        label: 'Grace windows',
+        value: String(watchdog.idleGraceTimeouts),
+        hint: 'Extra idle windows before first compaction.',
+      },
+      {
+        key: 'debug_abort',
+        label: 'Debug abort reason',
+        value: watchdog.debugAbortReason ? 'on' : 'off',
+        hint: 'Show raw abort reason in cancellation messages.',
+      },
+    ];
+  }
+
+  private openSettingsMenu(): void {
+    this.dispatch({ type: 'SETTINGS_OPEN', items: this.buildSettingsItems() });
+  }
+
+  private refreshSettingsMenu(selectedIndex?: number): void {
+    if (!this.state.settingsMenu) return;
+    this.dispatch({ type: 'SETTINGS_UPDATE', items: this.buildSettingsItems(), selectedIndex });
+  }
+
+  private adjustSelectedSetting(delta: number): void {
+    const menu = this.state.settingsMenu;
+    if (!menu?.items.length) return;
+    const selected = menu.items[menu.selectedIndex];
+    if (!selected) return;
+
+    switch (selected.key) {
+      case 'theme': {
+        const current = (this.config.theme || 'default') as typeof THEME_OPTIONS[number];
+        const idx = Math.max(0, THEME_OPTIONS.indexOf(current));
+        const next = THEME_OPTIONS[(idx + (delta >= 0 ? 1 : -1) + THEME_OPTIONS.length) % THEME_OPTIONS.length]!;
+        this.config.theme = next;
+        setRenderTheme(next);
+        break;
+      }
+      case 'approval': {
+        const current = (this.config.approval_mode || 'default') as typeof APPROVAL_OPTIONS[number];
+        const idx = Math.max(0, APPROVAL_OPTIONS.indexOf(current));
+        const next = APPROVAL_OPTIONS[(idx + (delta >= 0 ? 1 : -1) + APPROVAL_OPTIONS.length) % APPROVAL_OPTIONS.length]!;
+        this.config.approval_mode = next as any;
+        break;
+      }
+      case 'watchdog_timeout': {
+        const cur = this.config.watchdog_timeout_ms ?? 120_000;
+        const step = cur >= 180_000 ? 60_000 : 30_000;
+        this.config.watchdog_timeout_ms = Math.max(30_000, cur + (delta >= 0 ? step : -step));
+        break;
+      }
+      case 'watchdog_compactions': {
+        const cur = this.config.watchdog_max_compactions ?? 3;
+        this.config.watchdog_max_compactions = Math.max(0, cur + (delta >= 0 ? 1 : -1));
+        break;
+      }
+      case 'watchdog_grace': {
+        const cur = this.config.watchdog_idle_grace_timeouts ?? 1;
+        this.config.watchdog_idle_grace_timeouts = Math.max(0, cur + (delta >= 0 ? 1 : -1));
+        break;
+      }
+      case 'debug_abort': {
+        this.config.debug_abort_reason = !(this.config.debug_abort_reason === true);
+        break;
+      }
+      default:
+        return;
+    }
+
+    this.refreshSettingsMenu(menu.selectedIndex);
   }
 
   /** Push a system-role transcript item and re-render. */
@@ -148,7 +322,12 @@ export class TuiController {
     }
     if (head === "/help") {
       const cmds = allCommandNames().join("  ");
-      this.pushSystemMessage(`Commands: ${cmds}\nShell: !<cmd> to run, !! to inject output\nTUI: /branches to browse conversation branches`);
+      this.pushSystemMessage(
+        `Commands: ${cmds}\n` +
+        `Shell: !<cmd> to run, !! to inject output\n` +
+        `TUI: /branches [browse|checkout|merge], /steps, /settings\n` +
+        `Hotkeys: Ctrl+G step navigator, Ctrl+O quick settings`
+      );
       return true;
     }
     if (head === "/branches") {
@@ -156,6 +335,15 @@ export class TuiController {
       const sub = (parts[1] || '').toLowerCase();
       const action = sub === 'checkout' ? 'checkout' as const : sub === 'merge' ? 'merge' as const : 'browse' as const;
       await this.openBranchPicker(action);
+      return true;
+    }
+    if (head === '/steps') {
+      const query = line.replace(/^\/steps\s*/i, '').trim();
+      this.openStepNavigator(query);
+      return true;
+    }
+    if (head === '/settings') {
+      this.openSettingsMenu();
       return true;
     }
 
@@ -351,7 +539,7 @@ export class TuiController {
       type: "ALERT_PUSH",
       id: `info_${Date.now()}`,
       level: "info",
-      text: "Input policy: Enter=send, Ctrl+J/Alt+Enter=newline, Up/Down=history.",
+      text: "Input: Enter=send, Ctrl+J/Alt+Enter=newline, Up/Down=history, Ctrl+G=steps, Ctrl+O=settings.",
     });
 
     const onSigwinch = () => {
@@ -390,6 +578,39 @@ export class TuiController {
           continue; // swallow all other input during picker
         }
 
+        // Step navigator: type to filter, arrows to select, Enter to jump.
+        if (this.state.stepNavigator) {
+          const nAction = resolveAction(key);
+          if (key.startsWith('text:')) {
+            const ch = key.slice(5);
+            if (ch === 'q' && !this.state.stepNavigator.query) {
+              this.dispatch({ type: 'STEP_NAV_CLOSE' });
+            } else {
+              this.stepNavigatorQueryAppend(ch);
+            }
+            continue;
+          }
+          if (nAction === 'backspace') { this.stepNavigatorQueryBackspace(); continue; }
+          if (nAction === 'history_prev' || nAction === 'cursor_left') { this.dispatch({ type: 'STEP_NAV_MOVE', delta: -1 }); continue; }
+          if (nAction === 'history_next' || nAction === 'cursor_right') { this.dispatch({ type: 'STEP_NAV_MOVE', delta: 1 }); continue; }
+          if (nAction === 'scroll_up') { this.dispatch({ type: 'STEP_NAV_MOVE', delta: -10 }); continue; }
+          if (nAction === 'scroll_down') { this.dispatch({ type: 'STEP_NAV_MOVE', delta: 10 }); continue; }
+          if (nAction === 'send') { this.jumpToStepSelection(); continue; }
+          if (nAction === 'cancel' || nAction === 'quit') { this.dispatch({ type: 'STEP_NAV_CLOSE' }); continue; }
+          continue;
+        }
+
+        // Settings menu: arrows/select to adjust config quickly.
+        if (this.state.settingsMenu) {
+          const sAction = resolveAction(key);
+          if (sAction === 'history_prev') { this.dispatch({ type: 'SETTINGS_MOVE', delta: -1 }); continue; }
+          if (sAction === 'history_next') { this.dispatch({ type: 'SETTINGS_MOVE', delta: 1 }); continue; }
+          if (sAction === 'cursor_left') { this.adjustSelectedSetting(-1); continue; }
+          if (sAction === 'cursor_right' || sAction === 'send') { this.adjustSelectedSetting(1); continue; }
+          if (sAction === 'cancel' || sAction === 'quit' || key === 'text:q') { this.dispatch({ type: 'SETTINGS_CLOSE' }); continue; }
+          continue;
+        }
+
         if (key.startsWith("text:")) {
           this.resetTab();
           this.dispatch({ type: "USER_INPUT_INSERT", text: key.slice(5) });
@@ -405,6 +626,8 @@ export class TuiController {
         // Any non-tab action resets tab cycling
         this.resetTab();
 
+        if (action === 'open_step_navigator') { this.openStepNavigator(); continue; }
+        if (action === 'open_settings') { this.openSettingsMenu(); continue; }
         if (action === "quit") { void cleanup(); continue; }
         if (action === "cancel") {
           if (this.inFlight && this.aborter) { this.aborter.abort(); this.session?.cancel(); continue; }

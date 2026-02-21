@@ -118,6 +118,14 @@ test("scroll adds delta to panel scroll value", () => {
   assert.equal(s.scroll.transcript, 1);
 });
 
+test("scroll_set clamps at zero", () => {
+  let s = createInitialTuiState();
+  s = reduceTuiState(s, { type: "SCROLL_SET", panel: "transcript", value: 15 });
+  assert.equal(s.scroll.transcript, 15);
+  s = reduceTuiState(s, { type: "SCROLL_SET", panel: "transcript", value: -5 });
+  assert.equal(s.scroll.transcript, 0);
+});
+
 test("runtime state update sets activeRuntime", () => {
   let s = createInitialTuiState();
   s = reduceTuiState(s, { type: "RUNTIME_STATE_UPDATE", runtime: "agent:main" });
@@ -138,4 +146,48 @@ test("submit empty text does not add to input history", () => {
   let s = createInitialTuiState();
   s = reduceTuiState(s, { type: "USER_INPUT_SUBMIT", text: "" });
   assert.equal(s.inputHistory.length, 0);
+});
+
+test("step navigator open/move/close lifecycle", () => {
+  let s = createInitialTuiState();
+  s = reduceTuiState(s, {
+    type: "STEP_NAV_OPEN",
+    items: [
+      { id: "1", ts: Date.now(), role: "user", preview: "hello", lineStart: 0 },
+      { id: "2", ts: Date.now(), role: "assistant", preview: "world", lineStart: 2 },
+    ],
+  });
+  assert.ok(s.stepNavigator);
+  assert.equal(s.stepNavigator?.selectedIndex, 0);
+
+  s = reduceTuiState(s, { type: "STEP_NAV_MOVE", delta: 1 });
+  assert.equal(s.stepNavigator?.selectedIndex, 1);
+
+  s = reduceTuiState(s, { type: "STEP_NAV_CLOSE" });
+  assert.equal(s.stepNavigator, undefined);
+});
+
+test("settings menu open/update/close lifecycle", () => {
+  let s = createInitialTuiState();
+  s = reduceTuiState(s, {
+    type: "SETTINGS_OPEN",
+    items: [
+      { key: "theme", label: "Theme", value: "default" },
+      { key: "approval", label: "Approval", value: "default" },
+    ],
+  });
+  assert.ok(s.settingsMenu);
+
+  s = reduceTuiState(s, { type: "SETTINGS_MOVE", delta: 1 });
+  assert.equal(s.settingsMenu?.selectedIndex, 1);
+
+  s = reduceTuiState(s, {
+    type: "SETTINGS_UPDATE",
+    items: [{ key: "theme", label: "Theme", value: "dark" }],
+  });
+  assert.equal(s.settingsMenu?.items[0]?.value, "dark");
+  assert.equal(s.settingsMenu?.selectedIndex, 0);
+
+  s = reduceTuiState(s, { type: "SETTINGS_CLOSE" });
+  assert.equal(s.settingsMenu, undefined);
 });

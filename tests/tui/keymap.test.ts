@@ -7,6 +7,8 @@ test("keymap resolves core actions", () => {
   assert.equal(resolveAction("C-c"), "cancel");
   assert.equal(resolveAction("C-d"), "quit");
   assert.equal(resolveAction("tab"), "tab_complete");
+  assert.equal(resolveAction("C-g"), "open_step_navigator");
+  assert.equal(resolveAction("C-o"), "open_settings");
   assert.equal(resolveAction("up"), "history_prev");
   assert.equal(resolveAction("down"), "history_next");
   assert.equal(resolveAction("unknown"), null);
@@ -24,6 +26,10 @@ test("decodeRawInput maps PageUp/PageDown", () => {
 
 test("decodeRawInput maps Ctrl+J to C-j", () => {
   assert.deepEqual(decodeRawInput("\n"), ["C-j"]);
+});
+
+test("decodeRawInput maps Ctrl+G/Ctrl+O", () => {
+  assert.deepEqual(decodeRawInput("\u0007\u000f"), ["C-g", "C-o"]);
 });
 
 test("decodeRawInput maps Alt+Enter to M-enter", () => {
@@ -46,4 +52,9 @@ test("decodeRawInput drops unknown escape prefix without crashing", () => {
 
 test("resolveAction returns null for unknown keys", () => {
   assert.equal(resolveAction("definitely-unknown-key"), null);
+});
+
+test("decodeRawInput maps standalone escape", () => {
+  assert.deepEqual(decodeRawInput("\u001b"), ["esc"]);
+  assert.equal(resolveAction("esc"), "cancel");
 });
