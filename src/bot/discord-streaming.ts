@@ -40,7 +40,7 @@ export class DiscordStreamingMessage {
   private renderer = new ProgressMessageRenderer({
     maxToolLines: 6,
     maxTailLines: 4,
-    maxAssistantChars: 1400,
+    maxAssistantChars: 1200,
   });
 
   constructor(
@@ -124,14 +124,13 @@ export class DiscordStreamingMessage {
 
   private renderProgressText(): string {
     const tail = this.activeToolId ? this.tails.get(this.activeToolId) : null;
-    const assistant = this.buffer.trim() ? safeContent(this.buffer) : '';
 
     const doc = this.renderer.render({
       banner: this.banner,
-      statusLine: this.statusLine,
+      statusLine: this.statusLine || '⏳ Thinking...',
       toolLines: this.toolLines,
       toolTail: tail ? { name: tail.name, stream: tail.stream, lines: tail.lines } : null,
-      assistantMarkdown: assistant,
+      assistantMarkdown: this.buffer.trim() ? safeContent(this.buffer) : null,
     });
 
     return renderDiscordMarkdown(doc, { maxLen: 1900 });

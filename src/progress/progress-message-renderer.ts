@@ -1,4 +1,4 @@
-import type { IRDoc, IRBlock } from './ir.js';
+import type { IRBlock, IRDoc } from './ir.js';
 import { irLine } from './ir.js';
 
 export type ProgressRenderInput = {
@@ -23,18 +23,9 @@ export type ProgressRenderInput = {
 };
 
 export type ProgressRenderOptions = {
-  maxToolLines: number; // default 6
-  maxTailLines: number; // default 4
-  maxAssistantChars: number; // default 2000
-
-  /** Prefer code block for toolLines (recommended) */
-  toolLinesAsCode: boolean; // default true
-
-  /** Show status even if assistant has content */
-  showStatusAlways: boolean; // default false
-
-  /** If assistant is empty, render status line */
-  showStatusWhenEmpty: boolean; // default true
+  maxToolLines: number;       // default 6
+  maxTailLines: number;       // default 4
+  maxAssistantChars: number;  // default 2000
 };
 
 function tail<T>(arr: T[], n: number): T[] {
@@ -57,9 +48,6 @@ export class ProgressMessageRenderer {
       maxToolLines: opts?.maxToolLines ?? 6,
       maxTailLines: opts?.maxTailLines ?? 4,
       maxAssistantChars: opts?.maxAssistantChars ?? 2000,
-      toolLinesAsCode: opts?.toolLinesAsCode ?? true,
-      showStatusAlways: opts?.showStatusAlways ?? false,
-      showStatusWhenEmpty: opts?.showStatusWhenEmpty ?? true,
     };
   }
 
@@ -70,61 +58,43 @@ export class ProgressMessageRenderer {
 
     const banner = (input.banner ?? '').trim();
     const status = (input.statusLine ?? '').trim();
+    const top = banner || status || '⏳ Thinking...';
 
+    // Top line (banner wins; otherwise status)
+    blocks.push({ type: 'lines', lines: [irLine(top, banner ? 'bold' : 'dim')] });
+
+    // Tool summary lines
     const toolLines = tail((input.toolLines ?? []).filter(Boolean), o.maxToolLines);
-    const assistant = clipEnd((input.assistantMarkdown ?? '').trim(), o.maxAssistantChars);
-
-    const tailInfo = input.toolTail
-      ? {
-          name: (input.toolTail.name ?? '').trim(),
-          stream: input.toolTail.stream,
-          lines: tail((input.toolTail.lines ?? []).filter(Boolean), o.maxTailLines),
-        }
-      : null;
-
-    // Banner first (watchdog/compaction/etc.)
-    if (banner) {
-      blocks.push({ type: 'lines', lines: [irLine(banner, 'bold')] });
-      blocks.push({ type: 'spacer', lines: 1 });
-    }
-
-    // Tool lines (monospace)
     if (toolLines.length) {
-      if (o.toolLinesAsCode) {
-        blocks.push({ type: 'code', lines: toolLines });
-      } else {
-        blocks.push({ type: 'lines', lines: toolLines.map((l) => irLine(l, 'plain')), monospace: true });
+      blocks.push({ type: 'code', lines: toolLines });
+    }
+
+    // Tool tail
+    if (input.toolTail) {
+      const name = (input.toolTail.name ?? '').trim();
+      const stream = input.toolTail.stream === 'stderr' ? 'stderr' : 'stdout';
+      const lines = tail((input.toolTail.lines ?? []).filter(Boolean), o.maxTailLines);
+
+      if (lines.length) {
+        const label = `↳ ${stream} tail${name ? ` (${name})` : ''}`;
+        blocks.push({ type: 'lines', lines: [irLine(label, 'dim')] });
+        blocks.push({ type: 'code', lines, lang: stream });
       }
-      blocks.push({ type: 'spacer', lines: 1 });
     }
 
-    // Tool tail (if any)
-    if (tailInfo && tailInfo.lines.length) {
-      const label = `↳ ${tailInfo.stream} tail${tailInfo.name ? ` (${tailInfo.name})` : ''}`;
-      blocks.push({ type: 'lines', lines: [irLine(label, 'dim')] });
-      blocks.push({ type: 'code', lines: tailInfo.lines, lang: tailInfo.stream });
-      blocks.push({ type: 'spacer', lines: 1 });
+    // Assistant partial
+    const assistantRaw = (input.assistantMarkdown ?? '').trim();
+    if (assistantRaw) {
+      const assistant = clipEnd(assistantRaw, o.maxAssistantChars);
+      if (assistant.trim()) {
+        blocks.push({ type: 'markdown', markdown: assistant });
+      }
     }
 
-    // Status line (optionally)
-    if (status && (o.showStatusAlways || (!assistant && o.showStatusWhenEmpty))) {
-      blocks.push({ type: 'lines', lines: [irLine(status, 'dim')] });
-      if (!assistant) return { blocks }; // keep updates compact when no assistant text yet
-      blocks.push({ type: 'spacer', lines: 1 });
-    }
-
-    // Partial assistant markdown (or final text, if you reuse this renderer there)
-    if (assistant) {
-      blocks.push({ type: 'markdown', markdown: assistant });
-    }
-
-    // If absolutely nothing, show a minimal placeholder
+    // Safety: never return empty
     if (!blocks.length) {
-      blocks.push({ type: 'lines', lines: [irLine('⏳ Thinking…', 'dim')] });
+      blocks.push({ type: 'lines', lines: [irLine('⏳ Thinking...', 'dim')] });
     }
-
-    // Trim trailing spacers
-    while (blocks.length && blocks[blocks.length - 1].type === 'spacer') blocks.pop();
 
     return { blocks };
   }

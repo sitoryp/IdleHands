@@ -15,12 +15,10 @@ function spanToMd(s: IRSpan): string {
     case 'bold':
       return `**${t}**`;
     case 'code': {
-      // Minimal inline code safety
       const safe = t.replace(/`/g, 'ˋ');
       return `\`${safe}\``;
     }
     case 'dim':
-      // No true dim in markdown; italic is usually fine.
       return `*${t}*`;
     default:
       return t;
@@ -29,10 +27,8 @@ function spanToMd(s: IRSpan): string {
 
 function blockToMd(b: IRBlock): string {
   switch (b.type) {
-    case 'spacer': {
-      const n = Math.max(1, b.lines ?? 1);
-      return '\n'.repeat(n);
-    }
+    case 'spacer':
+      return '\n'.repeat(Math.max(1, b.lines ?? 1));
     case 'divider':
       return '---';
     case 'lines':
@@ -49,13 +45,14 @@ function blockToMd(b: IRBlock): string {
 
 export function renderDiscordMarkdown(doc: IRDoc, opts?: DiscordRenderOptions): string {
   const maxLen = Math.max(256, Math.floor(opts?.maxLen ?? 1900));
+
   const parts: string[] = [];
   let used = 0;
   let truncated = false;
 
   for (const block of doc.blocks ?? []) {
     const piece = blockToMd(block);
-    const sep = (parts.length && block.type !== 'spacer') ? '\n\n' : '';
+    const sep = parts.length ? '\n\n' : '';
     const add = sep + piece;
 
     if (used + add.length > maxLen) {
@@ -69,6 +66,6 @@ export function renderDiscordMarkdown(doc: IRDoc, opts?: DiscordRenderOptions): 
 
   let out = parts.join('');
   if (truncated && out.length + 2 <= maxLen) out += '\n…';
-  if (!out.trim()) out = '⏳ Thinking…';
+  if (!out.trim()) out = '⏳ Thinking...';
   return out;
 }
