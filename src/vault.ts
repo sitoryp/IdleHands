@@ -41,6 +41,8 @@ type VaultOptions = {
   path?: string;
   maxEntries?: number;
   projectDir?: string;
+  /** Retention cap for immutable review artifacts per project (artifact:review:item:*). */
+  immutableReviewArtifactsPerProject?: number;
 };
 
 function defaultVaultPath() {
@@ -68,9 +70,33 @@ function toSearchText(row: VaultDbRow) {
   return normalizeText(`${row.key ?? ''} ${row.tool ?? ''} ${row.value ?? ''} ${row.snippet ?? ''} ${row.content ?? ''}`);
 }
 
+function isProtectedArtifactKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  return key.startsWith('artifact:review:latest:') || key.startsWith('artifact:review:item:');
+}
+
+function isProtectedArtifactLatestKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  return key.startsWith('artifact:review:latest:');
+}
+
+function isImmutableArtifactItemKey(key: string | null | undefined): boolean {
+  if (!key) return false;
+  return key.startsWith('artifact:review:item:');
+}
+
+function immutableArtifactProjectId(key: string | null | undefined): string | null {
+  if (!isImmutableArtifactItemKey(key)) return null;
+  const rest = String(key).slice('artifact:review:item:'.length);
+  const idx = rest.indexOf(':');
+  if (idx <= 0) return null;
+  return rest.slice(0, idx);
+}
+
 export class VaultStore {
   private readonly dbPath: string;
   private readonly maxEntries: number;
+  private readonly immutableReviewArtifactsPerProject: number;
   private db: DatabaseSync | null = null;
   private initPromise: Promise<void> | null = null;
   private ftsEnabled = false;
@@ -79,6 +105,7 @@ export class VaultStore {
   constructor(opts: VaultOptions = {}) {
     this.dbPath = opts.path ?? defaultVaultPath();
     this.maxEntries = opts.maxEntries ?? 500;
+    this.immutableReviewArtifactsPerProject = Math.max(1, Math.floor(opts.immutableReviewArtifactsPerProject ?? 20));
     this._projectDir = opts.projectDir;
   }
 
@@ -184,18 +211,18 @@ export class VaultStore {
         id = this.insertAndIndex(kind, cleanKey, cleanVal, null, null, cleanVal, snippet);
       }
 
+      const immutableOverflow = Array.from(this.immutableArtifactOverflowIds());
+      if (immutableOverflow.length) {
+        this.deleteIds(immutableOverflow);
+      }
+
       const row = this.rows<{ count: number }>('SELECT COUNT(*) as count FROM vault_entries');
       const count = Number(row[0]?.count ?? 0);
       const excess = count - this.maxEntries;
       if (excess > 0) {
-        const stale = this.rows<{ id: number }>('SELECT id FROM vault_entries ORDER BY id ASC LIMIT ?', [excess]);
-        const ids = stale.map((item) => item.id);
+        const ids = this.selectPrunableIds(excess);
         if (ids.length) {
-          const placeholders = ids.map(() => '?').join(',');
-          this.run(`DELETE FROM vault_entries WHERE id IN (${placeholders})`, ids);
-          if (this.ftsEnabled) {
-            this.run(`DELETE FROM vault_fts WHERE rowid IN (${placeholders})`, ids);
-          }
+          this.deleteIds(ids);
         }
       }
 
@@ -515,25 +542,77 @@ export class VaultStore {
     }
   }
 
+  private immutableArtifactOverflowIds(): Set<number> {
+    const overflow = new Set<number>();
+    const rows = this.rows<{ id: number; key: string | null }>(
+      `SELECT id, key
+       FROM vault_entries
+       WHERE kind = 'system' AND key LIKE 'artifact:review:item:%'
+       ORDER BY id DESC`
+    );
+
+    const perProject = new Map<string, number>();
+    for (const row of rows) {
+      const projectId = immutableArtifactProjectId(row.key);
+      if (!projectId) continue;
+      const seen = perProject.get(projectId) ?? 0;
+      const next = seen + 1;
+      perProject.set(projectId, next);
+      if (next > this.immutableReviewArtifactsPerProject) {
+        overflow.add(row.id);
+      }
+    }
+
+    return overflow;
+  }
+
+  private deleteIds(ids: number[]): void {
+    if (!ids.length) return;
+    const placeholders = ids.map(() => '?').join(',');
+    this.run(`DELETE FROM vault_entries WHERE id IN (${placeholders})`, ids);
+    if (this.ftsEnabled) {
+      this.run(`DELETE FROM vault_fts WHERE rowid IN (${placeholders})`, ids);
+    }
+  }
+
+  private selectPrunableIds(excess: number): number[] {
+    if (excess <= 0) return [];
+
+    const immutableOverflow = this.immutableArtifactOverflowIds();
+    const candidates = this.rows<{ id: number; kind: VaultMode | 'system'; key: string | null }>(
+      'SELECT id, kind, key FROM vault_entries ORDER BY id ASC'
+    );
+
+    return candidates
+      .filter((item) => {
+        if (item.kind !== 'system') return true;
+        if (isProtectedArtifactLatestKey(item.key)) return false;
+        if (isImmutableArtifactItemKey(item.key)) return immutableOverflow.has(item.id);
+        return !isProtectedArtifactKey(item.key);
+      })
+      .slice(0, excess)
+      .map((item) => item.id);
+  }
+
   private async pruneToLimit() {
     if (!this.db) return;
 
-    const row = this.rows<{ count: number }>('SELECT COUNT(*) as count FROM vault_entries');
-    const count = Number(row[0]?.count ?? 0);
-    const excess = count - this.maxEntries;
-    if (excess <= 0) return;
+    this.transaction(() => {
+      const immutableOverflow = Array.from(this.immutableArtifactOverflowIds());
+      if (immutableOverflow.length) {
+        this.deleteIds(immutableOverflow);
+      }
 
-    const stale = this.rows<{ id: number }>('SELECT id FROM vault_entries ORDER BY id ASC LIMIT ?', [excess]);
-    const ids = stale.map((item) => item.id);
-    if (ids.length) {
-      const placeholders = ids.map(() => '?').join(',');
-      this.transaction(() => {
-        this.run(`DELETE FROM vault_entries WHERE id IN (${placeholders})`, ids);
-        if (this.ftsEnabled) {
-          this.run(`DELETE FROM vault_fts WHERE rowid IN (${placeholders})`, ids);
-        }
-      });
-    }
+      const row = this.rows<{ count: number }>('SELECT COUNT(*) as count FROM vault_entries');
+      const count = Number(row[0]?.count ?? 0);
+      const excess = count - this.maxEntries;
+      if (excess <= 0) return;
+
+      const ids = this.selectPrunableIds(excess);
+      if (ids.length) {
+        this.deleteIds(ids);
+      }
+    });
   }
 
   private indexFts(id: number, row: VaultDbRow) {

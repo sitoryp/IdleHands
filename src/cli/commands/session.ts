@@ -29,7 +29,7 @@ export const sessionCommands: SlashCommand[] = [
     async execute(ctx) {
       console.log(
         ctx.S.dim('Commands: ') +
-          '/help /quit /edit [seed text] /about /mode [code|sys] /status /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
+          '/help /quit /edit [seed text] /about /mode [code|sys] /status /watchdog [status] /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
           '\n' + ctx.S.dim('Shell: !<cmd> run once, !!<cmd> run + inject output, ! toggles shell mode') +
           '\n' + ctx.S.dim('Templates: /fix /review /test /explain /refactor, plus custom markdown commands in ~/.config/idlehands/commands/')
       );
@@ -58,6 +58,42 @@ export const sessionCommands: SlashCommand[] = [
     async execute(ctx) {
       ctx.lastStatusLine = formatStatusLine(ctx.session, ctx.config, ctx.S);
       console.log(ctx.lastStatusLine);
+      return true;
+    },
+  },
+  {
+    name: '/watchdog',
+    description: 'Show active watchdog settings',
+    async execute(ctx, args) {
+      const arg = args.trim().toLowerCase();
+      if (arg && arg !== 'status') {
+        console.log('Usage: /watchdog or /watchdog status');
+        return true;
+      }
+
+      const timeoutMs = Math.max(30_000, Math.floor(ctx.config.watchdog_timeout_ms ?? 120_000));
+      const maxCompactions = Math.max(0, Math.floor(ctx.config.watchdog_max_compactions ?? 3));
+      const grace = Math.max(0, Math.floor(ctx.config.watchdog_idle_grace_timeouts ?? 1));
+      const debug = ctx.config.debug_abort_reason === true;
+
+      const lines = [
+        'Watchdog Status',
+        `Timeout: ${timeoutMs.toLocaleString()} ms (${Math.round(timeoutMs / 1000)}s)`,
+        `Max compactions: ${maxCompactions}`,
+        `Grace windows: ${grace}`,
+        `Debug abort reason: ${debug ? 'on' : 'off'}`,
+      ];
+
+      const aggressive =
+        (timeoutMs <= 90_000 && grace === 0) ||
+        timeoutMs <= 60_000 ||
+        maxCompactions === 0;
+      if (aggressive) {
+        lines.push('');
+        lines.push('Recommended tuning: watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.');
+      }
+
+      console.log(lines.join('\n'));
       return true;
     },
   },

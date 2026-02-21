@@ -25,6 +25,8 @@ idlehands setup
 - `theme`, `vim_mode`, `harness`
 - `offline`, `auto_update_check`
 - `mcp_tool_budget`, `mcp_call_timeout_sec`
+- `watchdog_timeout_ms`, `watchdog_max_compactions`, `watchdog_idle_grace_timeouts`
+- `debug_abort_reason`
 
 ## Structured sections
 
@@ -86,3 +88,11 @@ list entirely. The model works in single-agent mode.
 `bot.telegram` supports token, allowlists, directory restrictions, queue/session limits, approval defaults, group controls, and `reply_to_user_messages` (native Telegram reply threading toggle).
 
 `bot.discord` supports token, allowlists, directory restrictions, queue/session limits, approval defaults, guild controls (`guild_id`, `allow_guilds`), and `reply_to_user_messages` (native Discord reply threading toggle).
+
+Both frontends also support:
+- `watchdog_timeout_ms`
+- `watchdog_max_compactions`
+- `watchdog_idle_grace_timeouts`
+- `debug_abort_reason`
+
+When bot-specific watchdog fields are omitted, top-level watchdog fields are used as defaults.

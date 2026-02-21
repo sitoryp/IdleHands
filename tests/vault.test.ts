@@ -227,4 +227,41 @@ describe('VaultStore', () => {
     vault.close();
     await fs.rm(dir, { recursive: true, force: true });
   });
+
+  it('caps immutable review artifacts per project while keeping latest pointer', async () => {
+    const dir = await mkTempDir();
+    const dbPath = path.join(dir, 'vault.db');
+    const projectId = 'project-cap-test';
+    const vault = new VaultStore({
+      path: dbPath,
+      maxEntries: 500,
+      immutableReviewArtifactsPerProject: 2,
+    });
+
+    await vault.init();
+
+    const latestKey = `artifact:review:latest:${projectId}`;
+    await vault.upsertNote(latestKey, JSON.stringify({ id: 'latest', kind: 'code_review' }), 'system');
+
+    for (let i = 1; i <= 5; i++) {
+      await vault.upsertNote(
+        `artifact:review:item:${projectId}:review-${i}`,
+        JSON.stringify({ id: `review-${i}`, kind: 'code_review', content: `body-${i}` }),
+        'system'
+      );
+    }
+
+    const listed = await vault.list(100);
+    const immutableKeys = listed
+      .map((x) => x.key ?? '')
+      .filter((k) => k.startsWith(`artifact:review:item:${projectId}:`));
+
+    assert.equal(immutableKeys.length, 2, `expected only 2 immutable artifacts retained, got: ${immutableKeys.length}`);
+
+    const latest = await vault.getLatestByKey(latestKey, 'system');
+    assert.ok(latest, 'latest artifact pointer should be retained');
+
+    vault.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
 });
