@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { ExecResult } from './types.js';
+import imageSize from 'image-size';
 
 import type { ReplayStore } from './replay.js';
 import type { VaultStore } from './vault.js';
@@ -12,6 +13,8 @@ import { sys_context as sysContextTool } from './sys/context.js';
 import { stateDir, shellEscape, BASH_PATH } from './utils.js';
 
 const DEFAULT_MAX_BACKUPS_PER_FILE = 5;
+const DEFAULT_MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_IMAGE_DIMENSION = 16384; // 16k pixels
 
 export type ToolContext = {
   cwd: string;
@@ -71,6 +74,65 @@ function guessMimeType(filePath: string, buf: Buffer): string {
     '.exe': 'application/x-executable', '.o': 'application/x-object',
   };
   return extMap[ext] ?? 'application/octet-stream';
+}
+
+/** Check if buffer contains a valid image by magic bytes */
+function isImageBuffer(buf: Buffer): boolean {
+  if (buf.length < 4) return false;
+  
+  // PNG
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true;
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true;
+  // GIF
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return true;
+  // WebP
+  if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && 
+      buf.length >= 12 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return true;
+  // BMP
+  if (buf[0] === 0x42 && buf[1] === 0x4d) return true;
+  // TIFF
+  if ((buf[0] === 0x49 && buf[1] === 0x49 && buf[2] === 0x2a && buf[3] === 0x00) ||
+      (buf[0] === 0x4d && buf[1] === 0x4d && buf[2] === 0x00 && buf[3] === 0x2a)) return true;
+  
+  return false;
+}
+
+/** Parse base64 data URL or raw base64 string */
+function parseBase64Data(data: string): { mimeType: string; buffer: Buffer } | null {
+  try {
+    let base64String: string;
+    let mimeType = 'application/octet-stream';
+    
+    // Check if it's a data URL
+    const dataUrlMatch = data.match(/^data:([^;]+);base64,(.+)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      base64String = dataUrlMatch[2];
+    } else {
+      // Assume raw base64
+      base64String = data;
+    }
+    
+    const buffer = Buffer.from(base64String, 'base64');
+    return { mimeType, buffer };
+  } catch {
+    return null;
+  }
+}
+
+/** Get image format name from MIME type */
+function getImageFormat(mimeType: string): string {
+  const formatMap: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpeg',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'image/bmp': 'bmp',
+    'image/tiff': 'tiff',
+    'image/svg+xml': 'svg'
+  };
+  return formatMap[mimeType] || 'unknown';
 }
 
 function defaultBackupDir() {
@@ -1178,6 +1240,138 @@ export async function vault_search(ctx: ToolContext, args: any) {
 }
 
 /** Phase 9: sys_context tool (mode-gated in agent schema). */
+export async function read_image(ctx: ToolContext, args: any) {
+  const maxImageBytes = ctx.maxExecBytes ? ctx.maxExecBytes * 100 : DEFAULT_MAX_IMAGE_BYTES; // Scale up from exec limit
+  
+  // Validate arguments - exactly one of path or data must be provided
+  const hasPath = typeof args?.path === 'string' && args.path.trim();
+  const hasData = typeof args?.data === 'string' && args.data.trim();
+  
+  if (!hasPath && !hasData) {
+    return 'ERROR: Either path or data must be provided';
+  }
+  
+  if (hasPath && hasData) {
+    return 'ERROR: path and data are mutually exclusive - provide only one';
+  }
+  
+  try {
+    let imageBuffer: Buffer;
+    let originalMimeType: string;
+    let sourcePath: string | undefined;
+    
+    if (hasPath) {
+      // Handle file path
+      const absPath = path.resolve(ctx.cwd, args.path);
+      
+      // Security check
+      const pathSafety = checkPathSafety(absPath);
+      if (pathSafety.tier === 'forbidden') {
+        return `ERROR: ${pathSafety.reason || 'Protected path'}`;
+      }
+      
+      // Check if file exists and is readable
+      try {
+        const stat = await fs.stat(absPath);
+        if (!stat.isFile()) {
+          return `ERROR: "${args.path}" is not a file`;
+        }
+        
+        if (stat.size > maxImageBytes) {
+          const sizeMB = (stat.size / 1024 / 1024).toFixed(1);
+          const maxMB = (maxImageBytes / 1024 / 1024).toFixed(1);
+          return `ERROR: Image too large (${sizeMB}MB, max ${maxMB}MB)`;
+        }
+      } catch (e: any) {
+        return `ERROR: Cannot access "${args.path}": ${e?.message ?? e}`;
+      }
+      
+      // Read file
+      try {
+        imageBuffer = await fs.readFile(absPath);
+        originalMimeType = guessMimeType(absPath, imageBuffer);
+        sourcePath = args.path;
+      } catch (e: any) {
+        return `ERROR: Cannot read "${args.path}": ${e?.message ?? e}`;
+      }
+    } else {
+      // Handle base64 data
+      const parsed = parseBase64Data(args.data);
+      if (!parsed) {
+        return 'ERROR: Invalid base64 data format';
+      }
+      
+      imageBuffer = parsed.buffer;
+      originalMimeType = parsed.mimeType;
+      
+      if (imageBuffer.length > maxImageBytes) {
+        const sizeMB = (imageBuffer.length / 1024 / 1024).toFixed(1);
+        const maxMB = (maxImageBytes / 1024 / 1024).toFixed(1);
+        return `ERROR: Image too large (${sizeMB}MB, max ${maxMB}MB)`;
+      }
+    }
+    
+    // Validate it's actually an image
+    if (!isImageBuffer(imageBuffer)) {
+      return `ERROR: File is not a valid image format`;
+    }
+    
+    // Get image dimensions and metadata
+    let dimensions: { width?: number; height?: number; type?: string } = {};
+    try {
+      dimensions = imageSize(imageBuffer);
+    } catch (e: any) {
+      return `ERROR: Cannot read image metadata: ${e?.message ?? e}`;
+    }
+    
+    if (!dimensions.width || !dimensions.height) {
+      return 'ERROR: Could not determine image dimensions';
+    }
+    
+    // Check dimensions
+    if (dimensions.width > MAX_IMAGE_DIMENSION || dimensions.height > MAX_IMAGE_DIMENSION) {
+      return `ERROR: Image dimensions too large (${dimensions.width}x${dimensions.height}, max ${MAX_IMAGE_DIMENSION}px)`;
+    }
+    
+    // Determine format
+    const detectedFormat = dimensions.type || getImageFormat(originalMimeType);
+    const mimeType = originalMimeType.startsWith('image/') ? originalMimeType : guessMimeType(sourcePath || '', imageBuffer);
+    
+    // Convert to base64 for model consumption
+    const base64 = imageBuffer.toString('base64');
+    
+    // Format size nicely
+    const sizeBytes = imageBuffer.length;
+    const sizeMB = (sizeBytes / 1024 / 1024).toFixed(2);
+    
+    // Build result object
+    const result = {
+      format: detectedFormat,
+      width: dimensions.width,
+      height: dimensions.height,
+      size_bytes: sizeBytes,
+      mime_type: mimeType,
+      base64: base64
+    };
+    
+    // Generate summary
+    const summary = `${detectedFormat.toUpperCase()} image (${dimensions.width}x${dimensions.height}, ${sizeMB}MB)`;
+    
+    if (ctx.dryRun) {
+      return `[DRY RUN] Would read image: ${summary}`;
+    }
+    
+    return JSON.stringify({
+      success: true,
+      summary: summary,
+      result: result
+    }, null, 2);
+    
+  } catch (e: any) {
+    return `ERROR: ${e?.message ?? e}`;
+  }
+}
+
 export async function sys_context(ctx: ToolContext, args: any) {
   return sysContextTool(ctx, args);
 }

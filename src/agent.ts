@@ -117,6 +117,15 @@ function toolResultSummary(name: string, args: Record<string, unknown>, content:
     }
     case 'vault_search':
       return `vault results`;
+    case 'read_image': {
+      try {
+        const r = JSON.parse(content);
+        if (r.success && r.result) {
+          return `${r.result.format} image (${r.result.width}x${r.result.height})`;
+        }
+      } catch {}
+      return content.slice(0, 80);
+    }
     default:
       return content.slice(0, 80);
   }
@@ -547,6 +556,31 @@ function buildToolsSchema(opts?: {
           ['command']
         )
       }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'read_image',
+        description: 'Read and analyze an image file. Returns structured metadata and base64-encoded image content. Supports local file paths or base64-encoded data.',
+        parameters: obj(
+          {
+            path: { 
+              type: 'string', 
+              description: 'Local file path to the image (relative or absolute). Mutually exclusive with data parameter.' 
+            },
+            data: { 
+              type: 'string', 
+              description: 'Base64-encoded image data (with or without data URL prefix). Mutually exclusive with path parameter.' 
+            },
+            detail: { 
+              type: 'string', 
+              enum: ['auto', 'low', 'high'], 
+              description: 'Processing detail level for vision models (auto, low, high). Default: auto.' 
+            }
+          },
+          [] // No required params - validation enforces exactly one of path or data
+        )
+      }
     }
   ];
 
@@ -894,6 +928,7 @@ function getMissingRequiredParams(toolName: string, args: Record<string, unknown
     insert_file: ['path', 'line', 'text'],
     list_dir: ['path'],
     search_files: ['pattern', 'path'],
+    read_image: [], // Custom validation: exactly one of path or data
     exec: ['command'],
     spawn_task: ['task'],
     sys_context: [],
@@ -914,7 +949,7 @@ function stripMarkdownFences(s: string): string {
 }
 
 function isReadOnlyTool(name: string) {
-  return name === 'read_file' || name === 'read_files' || name === 'list_dir' || name === 'search_files' || name === 'vault_search' || name === 'sys_context';
+  return name === 'read_file' || name === 'read_files' || name === 'list_dir' || name === 'search_files' || name === 'vault_search' || name === 'sys_context' || name === 'read_image';
 }
 
 /** Human-readable summary of what a blocked tool call would do. */
@@ -932,6 +967,8 @@ function planModeSummary(name: string, args: Record<string, unknown>): string {
       return `spawn sub-agent task: ${typeof args.task === 'string' ? args.task.slice(0, 80) : 'unknown'}`;
     case 'vault_note':
       return `vault note: ${args.key ?? 'unknown'}`;
+    case 'read_image':
+      return `read image: ${args.path ?? (args.data ? 'base64 data' : 'unknown')}`;
     default:
       return `${name}(${Object.keys(args).join(', ')})`;
   }

@@ -49,6 +49,7 @@
   "dependencies": {
     "discord.js": "^14.23.2",
     "grammy": "^1.40.0",
+    "image-size": "^1.2.0",
     "picocolors": "^1.1.1",
     "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.26.5"
