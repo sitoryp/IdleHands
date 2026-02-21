@@ -439,18 +439,18 @@ describe('image helpers', () => {
 
   it('extractImageRefs finds markdown image refs', () => {
     const refs = extractImageRefs('look at ![screenshot](./img/shot.png) and ![](other.jpg)');
-    assert.ok(refs.includes('./img/shot.png'));
-    assert.ok(refs.includes('other.jpg'));
+    assert.ok(refs.some(r => r.path === './img/shot.png'));
+    assert.ok(refs.some(r => r.path === 'other.jpg'));
   });
 
   it('extractImageRefs finds URL image refs', () => {
     const refs = extractImageRefs('see https://example.com/photo.png in the docs');
-    assert.ok(refs.some(r => r.includes('example.com/photo.png')));
+    assert.ok(refs.some(r => r.path.includes('example.com/photo.png')));
   });
 
   it('extractImageRefs finds path-like refs', () => {
     const refs = extractImageRefs('check ./screenshots/bug.jpg please');
-    assert.ok(refs.includes('./screenshots/bug.jpg'));
+    assert.ok(refs.some(r => r.path === './screenshots/bug.jpg'));
   });
 
   it('hasClipboardImageToken detects clipboard tokens', () => {
