@@ -785,8 +785,11 @@ async function main() {
       for (const w of expandedRes.warnings) console.log(S.dim(w));
       const promptText = ctx.pendingTemplate ? `${ctx.pendingTemplate}\n\n${expandedRes.text}` : expandedRes.text;
       ctx.pendingTemplate = null;
-      const imageExpanded = await expandPromptImages(promptText, projectDir(config), session.supportsVision);
+      const imageExpanded = await expandPromptImages(promptText, projectDir(config), session.supportsVision, true);
       for (const w of imageExpanded.warnings) console.log(S.dim(w));
+      if (imageExpanded.imageMetadata && imageExpanded.imageMetadata.length > 0) {
+        console.log(S.dim(`[vision] extracted metadata for ${imageExpanded.imageMetadata.length} image(s)`));
+      }
       ctx.lastRunnableInput = imageExpanded.content;
       const res = await runAgentTurnWithSpinner(ctx, imageExpanded.content);
       await ctx.maybeOfferAutoCommit(line);

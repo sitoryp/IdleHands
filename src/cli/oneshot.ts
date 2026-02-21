@@ -195,9 +195,13 @@ export async function runOneShot(opts: OneShotOpts): Promise<never> {
     const imageExpanded = await expandPromptImages(
       expandedRes.text,
       projectDir(config),
-      session.supportsVision
+      session.supportsVision,
+      true
     );
     for (const w of imageExpanded.warnings) writeWarning(w);
+    if (imageExpanded.imageMetadata && imageExpanded.imageMetadata.length > 0) {
+      writeWarning(`extracted metadata for ${imageExpanded.imageMetadata.length} image(s)`);
+    }
 
     const res = await session.ask(imageExpanded.content, oneShotHooks);
 

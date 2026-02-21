@@ -28,8 +28,11 @@ export const editingCommands: SlashCommand[] = [
       for (const w of expandedRes.warnings) console.log(ctx.S.dim(w));
       const promptText = ctx.pendingTemplate ? `${ctx.pendingTemplate}\n\n${expandedRes.text}` : expandedRes.text;
       ctx.pendingTemplate = null;
-      const imageExpanded = await expandPromptImages(promptText, projectDir(ctx.config), ctx.session.supportsVision);
+      const imageExpanded = await expandPromptImages(promptText, projectDir(ctx.config), ctx.session.supportsVision, true);
       for (const w of imageExpanded.warnings) console.log(ctx.S.dim(w));
+      if (imageExpanded.imageMetadata && imageExpanded.imageMetadata.length > 0) {
+        console.log(ctx.S.dim(`[vision] extracted metadata for ${imageExpanded.imageMetadata.length} image(s)`));
+      }
       ctx.lastRunnableInput = imageExpanded.content;
       try {
         const res = await runAgentTurnWithSpinner(ctx, imageExpanded.content);
