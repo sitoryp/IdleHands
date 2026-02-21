@@ -22,11 +22,11 @@ import {
   HIDE_CURSOR,
   SHOW_CURSOR,
   ERASE_LINE,
-  moveTo,
   enterFullScreen as enterFullScreenBase,
   leaveFullScreen as leaveFullScreenBase,
   clearScreen,
 } from '../tui/screen.js';
+import { splitTokens } from './command-utils.js';
 
 // ── ANSI codes ───────────────────────────────────────────────────────
 
@@ -36,7 +36,6 @@ const GREEN = '\x1b[32m';
 const YELLOW = '\x1b[33m';
 const RED = '\x1b[31m';
 const CYAN = '\x1b[36m';
-const MAGENTA = '\x1b[35m';
 const RESET = '\x1b[0m';
 
 
@@ -336,7 +335,7 @@ async function addBackendTUI(rl: readline.Interface, hosts: string[], existing?:
   const envRaw = await ask(rl, 'KEY=VALUE pairs (space-separated)', existingEnvStr);
   const env: Record<string, string> = {};
   if (envRaw) {
-    for (const pair of envRaw.split(/\s+/)) {
+    for (const pair of splitTokens(envRaw)) {
       const eqIdx = pair.indexOf('=');
       if (eqIdx > 0) env[pair.slice(0, eqIdx)] = pair.slice(eqIdx + 1);
     }
@@ -348,7 +347,7 @@ async function addBackendTUI(rl: readline.Interface, hosts: string[], existing?:
   info(`Example: ${DIM}-fa 1 -mmp 0 -ub 2048 -ctk q4_0 -ctv q4_0 -ngl 0${RESET}`);
   const existingArgsStr = existing?.args?.join(' ') ?? '';
   const argsRaw = await ask(rl, 'Args (space-separated)', existingArgsStr);
-  const args = argsRaw ? argsRaw.split(/\s+/).filter(Boolean) : [];
+  const args = argsRaw ? splitTokens(argsRaw) : [];
 
   return {
     id,

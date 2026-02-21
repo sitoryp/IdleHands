@@ -309,7 +309,6 @@ export async function insertSubTasks(
   }
   
   // Calculate indentation for subtasks
-  const parentIndent = '  '.repeat(parentTask.depth);
   const childIndent = '  '.repeat(parentTask.depth + 1);
   
   // Generate subtask lines

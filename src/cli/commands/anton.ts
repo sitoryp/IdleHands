@@ -24,6 +24,7 @@ import {
 } from '../../anton/reporter.js';
 import { parseTaskFile } from '../../anton/parser.js';
 import { projectDir } from '../../utils.js';
+import { firstToken, restTokens } from '../command-utils.js';
 
 // ── Flag parsing ────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ interface ParsedAntonFlags {
 }
 
 function parseAntonArgs(args: string): ParsedAntonFlags | null {
-  const tokens = args.split(/\s+/).filter(Boolean);
+  const tokens = restTokens(args);
   if (tokens.length === 0) return null;
 
   // First positional arg that doesn't start with -- is the file
@@ -288,7 +289,7 @@ export const antonCommands: SlashCommand[] = [
     name: '/anton',
     description: 'Autonomous task runner',
     async execute(ctx, args, _line) {
-      const sub = args.split(/\s+/)[0]?.toLowerCase() || '';
+      const sub = firstToken(args);
 
       if (!sub) {
         showStatus(ctx);

@@ -17,7 +17,6 @@ import { runHealthSubcommand } from './runtime-cmds.js';
 const SVC = 'idlehands-bot.service';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
-const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
 function checkActive(): boolean {
@@ -31,19 +30,6 @@ async function waitForActive(timeoutMs = 5000): Promise<boolean> {
     await new Promise(r => setTimeout(r, 500));
   }
   return checkActive();
-}
-
-async function probeEndpoint(url: string, timeoutMs = 10000): Promise<boolean> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${url}/health`, { signal: ac.signal });
-    clearTimeout(timer);
-    return res.ok;
-  } catch {
-    clearTimeout(timer);
-    return false;
-  }
 }
 
 async function showRestartProgress(): Promise<void> {

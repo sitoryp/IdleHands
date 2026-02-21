@@ -10,6 +10,7 @@ import fs from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import type { UserContent } from '../types.js';
 import { escapeRegex } from '../utils.js';
+import { splitTokens } from './command-utils.js';
 import type { makeStyler } from '../term.js';
 
 // ── Multi-line continuation ──────────────────────────────────────────
@@ -114,7 +115,7 @@ export function isLikelyBinary(buf: Buffer): boolean {
 }
 
 export function isPathCompletionContext(line: string): boolean {
-  const words = line.trim().split(/\s+/).filter(Boolean);
+  const words = splitTokens(line);
   if (words.length < 2) return false;
   const first = words[0].toLowerCase();
   const pathish = new Set([

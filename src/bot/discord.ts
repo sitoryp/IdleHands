@@ -8,12 +8,12 @@ import {
   SlashCommandBuilder,
   type Message,
   type TextBasedChannel,
-  type ChatInputCommandInteraction,
 } from 'discord.js';
 import { createSession, type AgentSession, type AgentHooks } from '../agent.js';
 import type { ApprovalMode, BotDiscordConfig, IdlehandsConfig, AgentPersona, AgentRouting, ModelEscalation } from '../types.js';
 import { DiscordConfirmProvider } from './confirm-discord.js';
 import { sanitizeBotOutputText } from './format.js';
+import { firstToken } from '../cli/command-utils.js';
 import { projectDir } from '../utils.js';
 import { WATCHDOG_RECOMMENDED_TUNING_TEXT, formatWatchdogCancelMessage, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../watchdog.js';
 import path from 'node:path';
@@ -1684,7 +1684,7 @@ When you escalate, your request will be re-run on a more capable model.`;
 
   async function handleDiscordAnton(managed: ManagedSession, msg: Message, content: string): Promise<void> {
     const args = content.replace(/^\/anton\s*/, '').trim();
-    const sub = args.split(/\s+/)[0]?.toLowerCase() || '';
+    const sub = firstToken(args);
 
     if (!sub || sub === 'status') {
       if (!managed.antonActive) {

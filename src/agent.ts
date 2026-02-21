@@ -2,7 +2,7 @@ import type { IdlehandsConfig, ChatMessage, UserContent, ToolSchema, ToolCall, T
 import { OpenAIClient } from './client.js';
 import { enforceContextBudget, stripThinking, estimateTokensFromMessages, estimateToolSchemaTokens } from './history.js';
 import * as tools from './tools.js';
-import { selectHarness, type Harness } from './harnesses.js';
+import { selectHarness } from './harnesses.js';
 import { BASE_MAX_TOKENS, deriveContextWindow, deriveGenerationParams, supportsVisionModel } from './model-customization.js';
 import { HookManager, loadHookPlugins, type HookSystemConfig } from './hooks/index.js';
 import { checkExecSafety, checkPathSafety } from './safety.js';
@@ -2733,7 +2733,6 @@ export async function createSession(opts: {
         await maybeAutoDetectModelChange();
 
         const beforeMsgs = messages;
-        const beforeTokens = estimateTokensFromMessages(beforeMsgs);
         const compacted = enforceContextBudget({
           messages: beforeMsgs,
           contextWindow,
@@ -2743,7 +2742,6 @@ export async function createSession(opts: {
           toolSchemaTokens: estimateToolSchemaTokens(getToolsSchema()),
         });
 
-        const compactedDropped = beforeMsgs.length > compacted.length || estimateTokensFromMessages(compacted) < beforeTokens;
         const compactedByRefs = new Set(compacted);
         const dropped = beforeMsgs.filter((m) => !compactedByRefs.has(m));
 

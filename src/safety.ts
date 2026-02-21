@@ -190,7 +190,6 @@ let _userProtectedDeleteRoots: string[] = [];
 
 /** Enable lockdown mode: all cautious commands become forbidden. */
 export function setLockdown(enabled: boolean) { _lockdown = enabled; }
-function isLockdown() { return _lockdown; }
 
 /** Enable safety logging to stderr. */
 export function setSafetyLogging(enabled: boolean) { _logEnabled = enabled; }

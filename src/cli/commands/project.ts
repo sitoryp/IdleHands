@@ -16,6 +16,7 @@ import { parseWatchArgs } from '../watch.js';
 import { unifiedDiffFromBuffers } from '../../replay_cli.js';
 import { colorizeUnifiedDiff, err as errFmt } from '../../term.js';
 import { projectDir } from '../../utils.js';
+import { restTokens } from '../command-utils.js';
 
 export const projectCommands: SlashCommand[] = [
   {
@@ -96,7 +97,7 @@ export const projectCommands: SlashCommand[] = [
   {
     name: '/changes',
     description: 'Show session changes',
-    async execute(ctx, args, line) {
+    async execute(ctx, args, _line) {
       const cwd = projectDir(ctx.config);
       if (args === 'reset') {
         ctx.changesBaselineMs = Date.now();
@@ -187,9 +188,9 @@ export const projectCommands: SlashCommand[] = [
   {
     name: '/index',
     description: 'Project index',
-    async execute(ctx, args, line) {
-      const parts = line.split(/\s+/).filter(Boolean);
-      const action = (parts[1] || '').toLowerCase();
+    async execute(ctx, _args, line) {
+      const parts = restTokens(line);
+      const action = (parts[0] || '').toLowerCase();
       if (!action || action === 'run') { await ctx.startIndexInBackground(); return true; }
       if (action === 'status') {
         if (!ctx.indexRunning) {

@@ -9,13 +9,12 @@ import path from 'node:path';
 import fsSync from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import readline from 'node:readline/promises';
-import type { UserContent, TurnEndEvent } from '../types.js';
 import { projectDir } from '../utils.js';
 import {
   queryServerHealth,
   formatStatusLine, StatusBar,
-  formatCount, formatTps, formatKv,
-  type PerfTurnSample, type ServerHealthSnapshot,
+  formatTps, formatKv,
+  type PerfTurnSample,
 } from './status.js';
 import { summarizeWatchChange } from './watch.js';
 import {

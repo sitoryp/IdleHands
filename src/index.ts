@@ -10,8 +10,8 @@ import fs from 'node:fs/promises';
 import { loadConfig, defaultConfigPath, applyRuntimeEndpoint } from './config.js';
 import { runSetup, guidedRuntimeOnboarding } from './cli/setup.js';
 import { projectDir } from './utils.js';
+import { splitTokens } from './cli/command-utils.js';
 import { createSession } from './agent.js';
-import type { UserContent, TurnEndEvent } from './types.js';
 import { unifiedDiffFromBuffers } from './replay_cli.js';
 import { makeStyler, resolveColorMode, colorizeUnifiedDiff, warn as warnFmt, err as errFmt } from './term.js';
 import { resolveTheme } from './themes.js';
@@ -45,7 +45,6 @@ import {
 import {
   generateInitContext, formatInitSummary,
 } from './cli/init.js';
-import type { ReplContext } from './cli/repl-context.js';
 import { buildReplContext } from './cli/build-repl-context.js';
 import { runAgentTurnWithSpinner } from './cli/agent-turn.js';
 import { printBotHelp, runBotSubcommand } from './cli/bot.js';
@@ -746,8 +745,9 @@ async function main() {
     }
 
     // Slash command dispatch via registry
-    const [slashHeadRaw, ...slashRest] = line.split(/\s+/);
-    const slashHead = slashHeadRaw.toLowerCase();
+    const slashTokens = splitTokens(line);
+    const slashHead = (slashTokens[0] ?? '').toLowerCase();
+    const slashRest = slashTokens.slice(1);
 
     const registeredCmd = findCommand(line);
     if (registeredCmd) {

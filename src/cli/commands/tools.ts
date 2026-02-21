@@ -5,13 +5,14 @@
 import type { SlashCommand } from '../command-registry.js';
 import { loadCustomCommands } from '../../commands.js';
 import { projectDir } from '../../utils.js';
+import { restTokens } from '../command-utils.js';
 
 export const toolCommands: SlashCommand[] = [
   {
     name: '/lsp',
     description: 'LSP server status',
     async execute(ctx, args) {
-      const sub = args.split(/\s+/)[0]?.toLowerCase() || '';
+      const sub = (restTokens(args)[0] || '').toLowerCase();
       if (!sub || sub === 'status' || sub === 'list') {
         const servers = ctx.session.listLspServers();
         if (!servers.length) {
@@ -32,8 +33,8 @@ export const toolCommands: SlashCommand[] = [
   {
     name: '/mcp',
     description: 'MCP server management',
-    async execute(ctx, args, line) {
-      const parts = args.split(/\s+/).filter(Boolean);
+    async execute(ctx, args, _line) {
+      const parts = restTokens(args);
       const sub = (parts[0] || '').toLowerCase();
 
       if (!sub || sub === 'list' || sub === 'status') {

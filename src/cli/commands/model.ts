@@ -10,6 +10,7 @@ import {
 import { estimateTokensFromMessages } from '../../history.js';
 import { err as errFmt, warn as warnFmt } from '../../term.js';
 import { projectDir } from '../../utils.js';
+import { restTokens } from '../command-utils.js';
 
 // Track current escalation tier for the terminal session
 let currentEscalationTier = 0;
@@ -261,10 +262,10 @@ export const modelCommands: SlashCommand[] = [
   {
     name: '/capture',
     description: 'Toggle request/response capture',
-    async execute(ctx, args, line) {
-      const parts = line.split(/\s+/).filter(Boolean);
-      const action = (parts[1] || '').toLowerCase();
-      const fileArg = parts[2] ? path.resolve(projectDir(ctx.config), parts[2]) : undefined;
+    async execute(ctx, _args, line) {
+      const parts = restTokens(line);
+      const action = (parts[0] || '').toLowerCase();
+      const fileArg = parts[1] ? path.resolve(projectDir(ctx.config), parts[1]) : undefined;
 
       if (!action) {
         console.log(`Capture: ${ctx.session.capturePath ? `on (${ctx.session.capturePath})` : 'off'}`);
@@ -297,9 +298,9 @@ export const modelCommands: SlashCommand[] = [
   {
     name: '/model',
     description: 'View/switch model',
-    async execute(ctx, args, line) {
-      const parts = line.split(/\s+/).filter(Boolean);
-      const arg1 = parts[1];
+    async execute(ctx, _args, line) {
+      const parts = restTokens(line);
+      const arg1 = parts[0];
 
       const warnAndMaybeCompactForContext = async () => {
         const used = estimateTokensFromMessages(ctx.session.messages);

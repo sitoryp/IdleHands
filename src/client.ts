@@ -538,7 +538,6 @@ export class OpenAIClient {
 
     let lastErr: unknown = makeClientError(`POST /chat/completions failed without response`, 503, true);
     const reqStart = Date.now();
-    const seen5xxMessages: string[] = [];
 
     for (let attempt = 0; attempt < 3; attempt++) {
       // Build a combined signal that fires on caller abort OR response timeout.

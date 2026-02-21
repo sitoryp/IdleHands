@@ -2,13 +2,15 @@
  * Watch mode argument parsing and change summarization.
  */
 
+import { splitTokens } from './command-utils.js';
+
 type WatchConfig = {
   paths: string[];
   maxIterationsPerTrigger: number;
 };
 
 export function parseWatchArgs(raw: string): WatchConfig {
-  const tokens = raw.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+  const tokens = splitTokens(raw);
   const paths: string[] = [];
   let maxIterationsPerTrigger = 3;
 
