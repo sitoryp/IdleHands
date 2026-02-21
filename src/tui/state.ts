@@ -20,6 +20,8 @@ export function createInitialTuiState(): TuiState {
     isStreaming: false,
     streamTargetId: undefined,
     confirmPending: undefined,
+    stepNavigator: undefined,
+    settingsMenu: undefined,
     scroll: { transcript: 0, input: 0, status: 0, tools: 0, alerts: 0 },
   };
 }
@@ -169,8 +171,11 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
     case "SCROLL":
       return { ...state, scroll: { ...state.scroll, [ev.panel]: state.scroll[ev.panel] + ev.delta } };
 
+    case "SCROLL_SET":
+      return { ...state, scroll: { ...state.scroll, [ev.panel]: Math.max(0, ev.value) } };
+
     case "BRANCH_PICKER_OPEN":
-      return { ...state, branchPicker: { branches: ev.branches, selectedIndex: 0, action: ev.action } };
+      return { ...state, branchPicker: { branches: ev.branches, selectedIndex: 0, action: ev.action }, stepNavigator: undefined, settingsMenu: undefined };
 
     case "BRANCH_PICKER_MOVE": {
       if (!state.branchPicker) return state;
@@ -182,6 +187,52 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
 
     case "BRANCH_PICKER_CLOSE":
       return { ...state, branchPicker: undefined };
+
+    case "STEP_NAV_OPEN": {
+      const q = (ev.query ?? '').trim();
+      const filtered = q
+        ? ev.items.filter((i) => (`${i.role} ${i.preview}`).toLowerCase().includes(q.toLowerCase()))
+        : ev.items;
+      return {
+        ...state,
+        stepNavigator: { items: filtered, selectedIndex: 0, query: q },
+        branchPicker: undefined,
+        settingsMenu: undefined,
+      };
+    }
+
+    case "STEP_NAV_MOVE": {
+      if (!state.stepNavigator) return state;
+      const len = state.stepNavigator.items.length;
+      if (len === 0) return state;
+      const next = Math.max(0, Math.min(len - 1, state.stepNavigator.selectedIndex + ev.delta));
+      return { ...state, stepNavigator: { ...state.stepNavigator, selectedIndex: next } };
+    }
+
+    case "STEP_NAV_CLOSE":
+      return { ...state, stepNavigator: undefined };
+
+    case "SETTINGS_OPEN":
+      return { ...state, settingsMenu: { items: ev.items, selectedIndex: 0 }, branchPicker: undefined, stepNavigator: undefined };
+
+    case "SETTINGS_MOVE": {
+      if (!state.settingsMenu) return state;
+      const len = state.settingsMenu.items.length;
+      if (len === 0) return state;
+      const next = Math.max(0, Math.min(len - 1, state.settingsMenu.selectedIndex + ev.delta));
+      return { ...state, settingsMenu: { ...state.settingsMenu, selectedIndex: next } };
+    }
+
+    case "SETTINGS_UPDATE": {
+      if (!state.settingsMenu) return state;
+      const selectedIndex = ev.selectedIndex == null
+        ? Math.min(state.settingsMenu.selectedIndex, Math.max(0, ev.items.length - 1))
+        : Math.max(0, Math.min(Math.max(0, ev.items.length - 1), ev.selectedIndex));
+      return { ...state, settingsMenu: { items: ev.items, selectedIndex } };
+    }
+
+    case "SETTINGS_CLOSE":
+      return { ...state, settingsMenu: undefined };
 
     default:
       return state;

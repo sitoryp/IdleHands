@@ -109,6 +109,68 @@ function buildOverlay(state: TuiState, width: number, height: number): string[] 
   return [`${C.bold}${top}${C.reset}`, ...mid, `${C.bold}${bot}${C.reset}`];
 }
 
+function buildStepNavigatorOverlay(state: TuiState, width: number, height: number): string[] {
+  const nav = state.stepNavigator;
+  if (!nav) return [];
+  const inner = Math.max(20, width - 2);
+  const lines: string[] = [];
+  lines.push(`${C.bold}Step Navigator${C.reset}  (↑/↓ move, Enter jump, type to filter, Backspace, Esc close)`);
+  lines.push(`${C.dim}Filter:${C.reset} ${nav.query || '(none)'}`);
+  lines.push('');
+
+  if (!nav.items.length) {
+    lines.push(`${C.dim}No matching steps.${C.reset}`);
+  } else {
+    for (let i = 0; i < nav.items.length; i += 1) {
+      const item = nav.items[i]!;
+      const selected = i === nav.selectedIndex;
+      const prefix = selected ? `${C.cyan}❯${C.reset}` : ' ';
+      const role = selected ? `${C.bold}${item.role}${C.reset}` : `${item.role}`;
+      lines.push(`${prefix} ${role}: ${item.preview}`);
+    }
+  }
+
+  const contentRows = Math.max(4, height - 2);
+  const body = lines.slice(0, contentRows).map((l) => truncate(l, inner - 2));
+  while (body.length < contentRows) body.push('');
+
+  const top = `┌${'─'.repeat(inner)}┐`;
+  const mid = body.map((line) => `│ ${line.padEnd(inner - 2)} │`);
+  const bot = `└${'─'.repeat(inner)}┘`;
+  return [`${C.bold}${top}${C.reset}`, ...mid, `${C.bold}${bot}${C.reset}`];
+}
+
+function buildSettingsOverlay(state: TuiState, width: number, height: number): string[] {
+  const menu = state.settingsMenu;
+  if (!menu) return [];
+  const inner = Math.max(20, width - 2);
+  const lines: string[] = [];
+  lines.push(`${C.bold}Quick Settings${C.reset}  (↑/↓ select, ←/→ adjust, Enter apply, Esc close)`);
+  lines.push('');
+
+  if (!menu.items.length) {
+    lines.push(`${C.dim}No settings available.${C.reset}`);
+  } else {
+    for (let i = 0; i < menu.items.length; i += 1) {
+      const item = menu.items[i]!;
+      const selected = i === menu.selectedIndex;
+      const prefix = selected ? `${C.cyan}❯${C.reset}` : ' ';
+      const label = selected ? `${C.bold}${item.label}${C.reset}` : item.label;
+      lines.push(`${prefix} ${label}: ${item.value}`);
+      if (selected && item.hint) lines.push(`   ${C.dim}${item.hint}${C.reset}`);
+    }
+  }
+
+  const contentRows = Math.max(4, height - 2);
+  const body = lines.slice(0, contentRows).map((l) => truncate(l, inner - 2));
+  while (body.length < contentRows) body.push('');
+
+  const top = `┌${'─'.repeat(inner)}┐`;
+  const mid = body.map((line) => `│ ${line.padEnd(inner - 2)} │`);
+  const bot = `└${'─'.repeat(inner)}┘`;
+  return [`${C.bold}${top}${C.reset}`, ...mid, `${C.bold}${bot}${C.reset}`];
+}
+
 export function renderTui(state: TuiState): void {
   const layout = calculateLayout(process.stdout.rows ?? 30, process.stdout.columns ?? 120);
   const cols = layout.cols;
@@ -129,6 +191,7 @@ export function renderTui(state: TuiState): void {
     `${C.dim}backend=${C.reset}${runtime?.backendId ?? '-'}`,
     `${C.dim}endpoint=${C.reset}${runtime?.endpoint ?? '-'}`,
     `${C.dim}health=${C.reset}${health}`,
+    `${C.dim}keys=${C.reset}^G steps ^O settings`,
   ].join(' | ');
   process.stdout.write(truncate(s2, cols) + '\n');
 
@@ -173,7 +236,13 @@ export function renderTui(state: TuiState): void {
     : state.branchPicker
       ? buildBranchOverlay(state, Math.min(Math.max(36, Math.floor(cols * 0.75)), cols - 2),
           Math.min(layout.transcriptRows, Math.max(8, Math.floor(layout.transcriptRows * 0.9))))
-      : null;
+      : state.stepNavigator
+        ? buildStepNavigatorOverlay(state, Math.min(Math.max(44, Math.floor(cols * 0.8)), cols - 2),
+            Math.min(layout.transcriptRows, Math.max(10, Math.floor(layout.transcriptRows * 0.92))))
+        : state.settingsMenu
+          ? buildSettingsOverlay(state, Math.min(Math.max(44, Math.floor(cols * 0.8)), cols - 2),
+              Math.min(layout.transcriptRows, Math.max(10, Math.floor(layout.transcriptRows * 0.92))))
+          : null;
 
   if (activeOverlay) {
     const boxW = Math.min(Math.max(36, Math.floor(cols * 0.75)), cols - 2);

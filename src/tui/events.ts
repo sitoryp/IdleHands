@@ -25,6 +25,14 @@ export type TuiEvent =
   | { type: "CONFIRM_DISMISS" }
   | { type: "FOCUS_SET"; panel: PanelId }
   | { type: "SCROLL"; panel: PanelId; delta: number }
+  | { type: "SCROLL_SET"; panel: PanelId; value: number }
   | { type: "BRANCH_PICKER_OPEN"; branches: import('./types.js').BranchPickerItem[]; action: 'checkout' | 'merge' | 'browse' }
   | { type: "BRANCH_PICKER_MOVE"; delta: number }
-  | { type: "BRANCH_PICKER_CLOSE" };
+  | { type: "BRANCH_PICKER_CLOSE" }
+  | { type: "STEP_NAV_OPEN"; items: import('./types.js').StepNavigatorItem[]; query?: string }
+  | { type: "STEP_NAV_MOVE"; delta: number }
+  | { type: "STEP_NAV_CLOSE" }
+  | { type: "SETTINGS_OPEN"; items: import('./types.js').SettingsMenuItem[] }
+  | { type: "SETTINGS_MOVE"; delta: number }
+  | { type: "SETTINGS_UPDATE"; items: import('./types.js').SettingsMenuItem[]; selectedIndex?: number }
+  | { type: "SETTINGS_CLOSE" };

@@ -15,13 +15,18 @@ export type TuiAction =
   | "focus_prev"
   | "scroll_up"
   | "scroll_down"
-  | "history_search";
+  | "history_search"
+  | "open_step_navigator"
+  | "open_settings";
 
 export function resolveAction(key: string): TuiAction | null {
   switch (key) {
     case "C-c": return "cancel";
+    case "esc": return "cancel";
     case "C-d": return "quit";
     case "C-r": return "history_search";
+    case "C-g": return "open_step_navigator";
+    case "C-o": return "open_settings";
     case "tab": return "tab_complete";
     case "S-tab": return "focus_prev";
     case "pageup": return "scroll_up";
@@ -70,11 +75,14 @@ export function decodeRawInput(chunk: string): string[] {
         }
       }
       if (c1 === "\r") { keys.push("M-enter"); i += 1; continue; }
+      if (c1 === undefined) { keys.push('esc'); continue; }
       continue;
     }
     if (ch === "\u0003") { keys.push("C-c"); continue; }
     if (ch === "\u0004") { keys.push("C-d"); continue; }
     if (ch === "\u0012") { keys.push("C-r"); continue; }
+    if (ch === "\u0007") { keys.push("C-g"); continue; }
+    if (ch === "\u000f") { keys.push("C-o"); continue; }
     if (ch === "\u0009") { keys.push("tab"); continue; }
     if (ch === "\u007f") { keys.push("backspace"); continue; }
     if (ch === "\r") { keys.push("enter"); continue; }

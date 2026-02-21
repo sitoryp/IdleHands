@@ -49,6 +49,32 @@ export interface BranchPickerState {
   action: 'checkout' | 'merge' | 'browse';
 }
 
+export interface StepNavigatorItem {
+  id: string;
+  ts: number;
+  role: TranscriptRole;
+  preview: string;
+  lineStart: number;
+}
+
+export interface StepNavigatorState {
+  items: StepNavigatorItem[];
+  selectedIndex: number;
+  query: string;
+}
+
+export interface SettingsMenuItem {
+  key: string;
+  label: string;
+  value: string;
+  hint?: string;
+}
+
+export interface SettingsMenuState {
+  items: SettingsMenuItem[];
+  selectedIndex: number;
+}
+
 export interface TuiState {
   mode: TuiMode;
   focus: PanelId;
@@ -70,6 +96,8 @@ export interface TuiState {
     showDiff: boolean;
   };
   branchPicker?: BranchPickerState;
+  stepNavigator?: StepNavigatorState;
+  settingsMenu?: SettingsMenuState;
   scroll: Record<PanelId, number>;
 }
 
