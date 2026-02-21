@@ -13,6 +13,7 @@ const DEFAULTS: IdlehandsConfig = {
   timeout: 600,
   max_iterations: 100,
   response_timeout: 600,
+  connection_timeout: 600,
   approval_mode: 'auto-edit',
   no_confirm: false,
   verbose: false,
@@ -196,6 +197,7 @@ export async function loadConfig(opts: {
     timeout: parseNum(process.env.IDLEHANDS_TIMEOUT),
     max_iterations: parseNum(process.env.IDLEHANDS_MAX_ITERATIONS),
     response_timeout: parseNum(process.env.IDLEHANDS_RESPONSE_TIMEOUT),
+    connection_timeout: parseNum(process.env.IDLEHANDS_CONNECTION_TIMEOUT),
     approval_mode: process.env.IDLEHANDS_APPROVAL_MODE as any,
     no_confirm: parseBool(process.env.IDLEHANDS_NO_CONFIRM),
     verbose: parseBool(process.env.IDLEHANDS_VERBOSE),
@@ -520,6 +522,12 @@ export async function loadConfig(opts: {
   }
   if (typeof merged.max_iterations === 'number') {
     merged.max_iterations = Math.max(1, Math.floor(merged.max_iterations));
+  }
+  if (typeof merged.response_timeout === 'number') {
+    merged.response_timeout = Math.max(1, Math.floor(merged.response_timeout));
+  }
+  if (typeof merged.connection_timeout === 'number') {
+    merged.connection_timeout = Math.max(1, Math.floor(merged.connection_timeout));
   }
   if (typeof merged.temperature === 'number') {
     merged.temperature = Math.max(0, Math.min(2, merged.temperature));

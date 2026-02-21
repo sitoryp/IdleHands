@@ -758,10 +758,17 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
     drawHeader('Step 4 of 7 — Limits');
 
     console.log(`  ${BOLD}Response timeout${RESET}`);
-    info('How long to wait for a model reply before giving up.');
+    info('How long to wait for a full model reply before giving up.');
     const currentResponseTimeout = existingConfig?.response_timeout ?? 600;
     const responseTimeoutStr = await ask(rl, 'Seconds', String(currentResponseTimeout));
-    const responseTimeout = Math.max(10, parseInt(responseTimeoutStr, 10) || 300);
+    const responseTimeout = Math.max(10, parseInt(responseTimeoutStr, 10) || 600);
+
+    console.log();
+    console.log(`  ${BOLD}Connection/header timeout${RESET}`);
+    info('How long to wait for initial HTTP connection/response headers.');
+    const currentConnectionTimeout = existingConfig?.connection_timeout ?? currentResponseTimeout;
+    const connectionTimeoutStr = await ask(rl, 'Seconds', String(currentConnectionTimeout));
+    const connectionTimeout = Math.max(10, parseInt(connectionTimeoutStr, 10) || responseTimeout);
 
     console.log();
     console.log(`  ${BOLD}Max iterations${RESET}`);
@@ -914,6 +921,7 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
       finalConfig.approval_mode = approvalMode;
       finalConfig.no_confirm = approvalMode === 'yolo';
       finalConfig.response_timeout = responseTimeout;
+      finalConfig.connection_timeout = connectionTimeout;
       finalConfig.max_iterations = maxIterations;
       finalConfig.theme = theme;
       finalConfig.sub_agents = {

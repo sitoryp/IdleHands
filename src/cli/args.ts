@@ -193,7 +193,8 @@ Options:
   --temperature F
   --top-p F
   --timeout N
-  --response-timeout N       (seconds to wait for model responses; default 300)
+  --response-timeout N       (seconds to wait for model responses; default 600)
+  --connection-timeout N     (seconds to wait for initial HTTP connection/headers; default follows response-timeout)
   --max-iterations N
   --sys                      (start in sys mode)
   --sys-eager                (inject system snapshot into first message)

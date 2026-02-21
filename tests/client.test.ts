@@ -3,6 +3,24 @@ import assert from 'node:assert/strict';
 import { OpenAIClient, RateLimiter, BackpressureMonitor } from '../dist/client.js';
 
 describe('OpenAIClient retry behavior', () => {
+  it('connection timeout follows response timeout by default and is overrideable', () => {
+    const client: any = new OpenAIClient('http://example.invalid/v1', undefined, false);
+
+    assert.equal(client.defaultResponseTimeoutMs, 600_000);
+    assert.equal(client.defaultConnectionTimeoutMs, 600_000);
+
+    client.setResponseTimeout(900);
+    assert.equal(client.defaultResponseTimeoutMs, 900_000);
+    assert.equal(client.defaultConnectionTimeoutMs, 900_000, 'connection timeout should follow response timeout when not explicitly set');
+
+    client.setConnectionTimeout(1200);
+    assert.equal(client.defaultConnectionTimeoutMs, 1_200_000);
+
+    client.setResponseTimeout(30);
+    assert.equal(client.defaultResponseTimeoutMs, 30_000);
+    assert.equal(client.defaultConnectionTimeoutMs, 1_200_000, 'explicit connection timeout should remain pinned');
+  });
+
   it('retries once on connection timeout (non-streaming chat)', async () => {
     const client: any = new OpenAIClient('http://example.invalid/v1', undefined, false);
 

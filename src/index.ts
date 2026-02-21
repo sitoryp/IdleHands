@@ -221,6 +221,7 @@ async function main() {
     top_p: asNum(args['top-p'] ?? args.top_p),
     timeout: asNum(args.timeout),
     response_timeout: asNum(args['response-timeout'] ?? args.response_timeout),
+    connection_timeout: asNum(args['connection-timeout'] ?? args.connection_timeout),
     max_iterations: asNum(args['max-iterations'] ?? args.max_iterations),
     context_window: asNum(args['context-window'] ?? args.context_window),
     approval_mode: typeof args['approval-mode'] === 'string'

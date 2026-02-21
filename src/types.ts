@@ -160,7 +160,8 @@ export type IdlehandsConfig = {
   max_iterations: number;
 
   // network
-  response_timeout: number;  // seconds to wait for model server responses (default 300)
+  response_timeout: number;   // seconds to wait for model server responses (default 600)
+  connection_timeout?: number; // seconds to wait for initial HTTP connection/headers (default follows response_timeout)
 
   // safety + UX
   approval_mode: ApprovalMode;
