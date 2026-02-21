@@ -342,42 +342,32 @@ export async function undo_path(ctx: ToolContext, args: any) {
 
 export async function read_file(ctx: ToolContext, args: any) {
   const p = resolvePath(ctx, args?.path);
-  if (!p) throw new Error('read_file: missing path');
-
-  const DEFAULT_LIMIT = 200;
-  const MAX_LIMIT = 240;
-  const DEFAULT_CONTEXT = 10;
-  const MAX_CONTEXT = 80;
-  const DEFAULT_MAX_BYTES = 20_000;
-  const MIN_MAX_BYTES = 256;
-  const MAX_MAX_BYTES = 20_000;
-
-  const rawOffset = args?.offset != null ? Number(args.offset) : undefined;
-  const offset = Number.isFinite(rawOffset as number) && (rawOffset as number) >= 1
-    ? Math.floor(rawOffset as number)
-    : 1;
+  const offset = args?.offset != null ? Number(args.offset) : undefined;
 
   const rawLimit = args?.limit != null ? Number(args.limit) : undefined;
   const limit = Number.isFinite(rawLimit as number) && (rawLimit as number) > 0
-    ? Math.min(MAX_LIMIT, Math.max(1, Math.floor(rawLimit as number)))
-    : DEFAULT_LIMIT;
+    ? Math.max(1, Math.floor(rawLimit as number))
+    : 200;
 
   const search = typeof args?.search === 'string' ? args.search : undefined;
 
   const rawContext = args?.context != null ? Number(args.context) : undefined;
-  const context = Number.isFinite(rawContext as number)
-    ? Math.min(MAX_CONTEXT, Math.max(0, Math.floor(rawContext as number)))
-    : DEFAULT_CONTEXT;
+  const context = Number.isFinite(rawContext as number) && (rawContext as number) >= 0
+    ? Math.max(0, Math.min(200, Math.floor(rawContext as number)))
+    : 10;
 
-  const rawFormat = typeof args?.format === 'string' ? args.format.toLowerCase().trim() : 'numbered';
-  const format: 'plain' | 'numbered' | 'sparse' = rawFormat === 'plain' || rawFormat === 'sparse' || rawFormat === 'numbered'
-    ? rawFormat
-    : 'numbered';
+  const formatRaw = typeof args?.format === 'string' ? args.format.trim().toLowerCase() : 'numbered';
+  const format: 'plain' | 'numbered' | 'sparse' =
+    (formatRaw === 'plain' || formatRaw === 'numbered' || formatRaw === 'sparse')
+      ? (formatRaw as 'plain' | 'numbered' | 'sparse')
+      : 'numbered';
 
   const rawMaxBytes = args?.max_bytes != null ? Number(args.max_bytes) : undefined;
   const maxBytes = Number.isFinite(rawMaxBytes as number) && (rawMaxBytes as number) > 0
-    ? Math.min(MAX_MAX_BYTES, Math.max(MIN_MAX_BYTES, Math.floor(rawMaxBytes as number)))
-    : DEFAULT_MAX_BYTES;
+    ? Math.min(256 * 1024, Math.max(256, Math.floor(rawMaxBytes as number)))
+    : 20 * 1024;
+
+  if (!p) throw new Error('read_file: missing path');
 
   // Detect directories early with a helpful message instead of cryptic EISDIR
   try {
@@ -385,7 +375,7 @@ export async function read_file(ctx: ToolContext, args: any) {
     if (stat.isDirectory()) {
       return `read_file: "${p}" is a directory, not a file. Use list_dir to see its contents, or search_files to find specific code.`;
     }
-  } catch {
+  } catch (e: any) {
     // stat failure (ENOENT etc.) — let readFile handle it for the standard error path
   }
 
@@ -393,7 +383,7 @@ export async function read_file(ctx: ToolContext, args: any) {
     throw new Error(`read_file: cannot read ${p}: ${e?.message ?? String(e)}`);
   });
 
-  // Binary detection: NUL byte in first 512 bytes
+  // Binary detection: NUL byte in first 512 bytes (§8)
   for (let i = 0; i < Math.min(buf.length, 512); i++) {
     if (buf[i] === 0) {
       const mimeGuess = guessMimeType(p, buf);
@@ -401,65 +391,73 @@ export async function read_file(ctx: ToolContext, args: any) {
     }
   }
 
-  const effective = buf.length > maxBytes ? buf.subarray(0, maxBytes) : buf;
-  const text = effective.toString('utf8');
+  const text = buf.toString('utf8');
   const lines = text.split(/\r?\n/);
 
-  const renderLine = (ln: number, value: string): string => {
-    if (format === 'plain') return value;
-    return `${String(ln).padStart(6, ' ')}| ${value}`;
-  };
+  let start = 1;
+  let end = Math.min(lines.length, limit);
 
-  const out: string[] = [];
+  let matchLines: number[] = [];
 
   if (search) {
-    const matchLines: number[] = [];
+    matchLines = [];
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].includes(search)) matchLines.push(i + 1);
     }
-
     if (!matchLines.length) {
-      const truncatedSuffix = buf.length > maxBytes ? ` (truncated to ${maxBytes} bytes)` : '';
-      return `# ${p}\n# search not found: ${JSON.stringify(search)}\n# scanned ${lines.length} lines${truncatedSuffix}`;
+      return truncateBytes(
+        `# ${p}\n# search not found: ${JSON.stringify(search)}\n# file has ${lines.length} lines`,
+        maxBytes
+      ).text;
     }
-
-    out.push(`# ${p}`);
-    out.push(`# matches at lines: ${matchLines.slice(0, 20).join(', ')}${matchLines.length > 20 ? ' [truncated]' : ''}`);
-
-    if (format === 'sparse') {
-      const shown = matchLines.slice(0, limit);
-      for (const ln of shown) out.push(renderLine(ln, lines[ln - 1] ?? ''));
-      if (matchLines.length > shown.length) out.push(`# ... (${matchLines.length - shown.length} more matches)`);
-    } else {
-      const firstIdx = matchLines[0];
-      let start = Math.max(1, firstIdx - context);
-      let end = Math.min(lines.length, firstIdx + context);
-
-      if (end - start + 1 > limit) {
-        const half = Math.max(0, Math.floor((limit - 1) / 2));
-        start = Math.max(1, firstIdx - half);
-        end = Math.min(lines.length, start + limit - 1);
-        if (end - start + 1 < limit) start = Math.max(1, end - limit + 1);
-      }
-
-      for (let ln = start; ln <= end; ln++) out.push(renderLine(ln, lines[ln - 1] ?? ''));
-      if (end < lines.length) out.push(`# ... (${lines.length - end} more lines)`);
+    const firstIdx = matchLines[0];
+    // Window around the first match, but never return more than `limit` lines.
+    start = Math.max(1, firstIdx - context);
+    end = Math.min(lines.length, firstIdx + context);
+    if (end - start + 1 > limit) {
+      const half = Math.floor(limit / 2);
+      start = Math.max(1, firstIdx - half);
+      end = Math.min(lines.length, start + limit - 1);
     }
-
-    if (buf.length > maxBytes) out.push(`# truncated_bytes: ${buf.length - maxBytes} (set max_bytes to inspect more)`);
-    return out.join('\n');
+  } else if (offset && offset >= 1) {
+    start = Math.max(1, Math.floor(offset));
+    end = Math.min(lines.length, start + limit - 1);
   }
 
-  const start = offset;
-  const end = Math.min(lines.length, start + limit - 1);
+  const matchSet = new Set<number>(matchLines);
 
-  out.push(`# ${p}`);
-  out.push(`# range ${start}-${end} of ${lines.length} lines (limit=${limit}, format=${format})`);
-  for (let ln = start; ln <= end; ln++) out.push(renderLine(ln, lines[ln - 1] ?? ''));
+  const out: string[] = [];
+  out.push(`# ${p} (lines ${start}-${end} of ${lines.length})`);
+
+  if (search) {
+    const shown = matchLines.slice(0, 20);
+    out.push(`# matches at lines: ${shown.join(', ')}${matchLines.length > shown.length ? ' …' : ''}`);
+  }
+
+  const renderNumbered = (ln: number, body: string) => `${ln}| ${body}`;
+
+  for (let ln = start; ln <= end; ln++) {
+    const body = lines[ln - 1] ?? '';
+
+    if (format === 'plain') {
+      out.push(body);
+      continue;
+    }
+
+    if (format === 'numbered') {
+      out.push(renderNumbered(ln, body));
+      continue;
+    }
+
+    // sparse: number anchor lines + matches; otherwise raw text.
+    const isAnchor = ln === start || ln === end || (ln - start) % 10 === 0;
+    if (isAnchor || matchSet.has(ln)) out.push(renderNumbered(ln, body));
+    else out.push(body);
+  }
+
   if (end < lines.length) out.push(`# ... (${lines.length - end} more lines)`);
-  if (buf.length > maxBytes) out.push(`# truncated_bytes: ${buf.length - maxBytes} (set max_bytes to inspect more)`);
 
-  return out.join('\n');
+  return truncateBytes(out.join('\n'), maxBytes).text;
 }
 
 export async function read_files(ctx: ToolContext, args: any) {
@@ -728,21 +726,164 @@ export async function edit_file(ctx: ToolContext, args: any) {
   return `edited ${p} (replace_all=${replaceAll})${replayNote}${cwdWarning}`;
 }
 
-/**
- * edit_range: Token-efficient line range replacement.
- * Replaces lines [start_line, end_line] (inclusive, 1-indexed) with replacement text.
- */
+type PatchTouchInfo = {
+  paths: string[]; // normalized relative paths
+  created: Set<string>;
+  deleted: Set<string>;
+};
+
+function normalizePatchPath(p: string): string {
+  let s = String(p ?? '').trim();
+  if (!s || s === '/dev/null') return '';
+
+  // Strip quotes some generators add
+  s = s.replace(/^"|"$/g, '');
+  // Drop common diff prefixes
+  s = s.replace(/^[ab]\//, '').replace(/^\.\/+/, '');
+  // Normalize to posix separators for diffs
+  s = s.replace(/\\/g, '/');
+
+  const norm = path.posix.normalize(s);
+  if (norm.startsWith('../') || norm === '..' || norm.startsWith('/')) {
+    throw new Error(`apply_patch: unsafe path in patch: ${JSON.stringify(s)}`);
+  }
+  return norm;
+}
+
+function extractTouchedFilesFromPatch(patchText: string): PatchTouchInfo {
+  const paths: string[] = [];
+  const created = new Set<string>();
+  const deleted = new Set<string>();
+
+  let pendingOld: string | null = null;
+  let pendingNew: string | null = null;
+
+  const seen = new Set<string>();
+  const lines = String(patchText ?? '').split(/\r?\n/);
+
+  for (const line of lines) {
+    // Primary: git-style header
+    if (line.startsWith('diff --git ')) {
+      const m = /^diff --git\s+a\/(.+?)\s+b\/(.+?)\s*$/.exec(line);
+      if (m) {
+        const aPath = normalizePatchPath(m[1]);
+        const bPath = normalizePatchPath(m[2]);
+        const use = bPath || aPath;
+        if (use && !seen.has(use)) {
+          seen.add(use);
+          paths.push(use);
+        }
+      }
+      pendingOld = null;
+      pendingNew = null;
+      continue;
+    }
+
+    // Fallback: unified diff headers
+    if (line.startsWith('--- ')) {
+      pendingOld = line.slice(4).trim();
+      continue;
+    }
+    if (line.startsWith('+++ ')) {
+      pendingNew = line.slice(4).trim();
+
+      const oldP = pendingOld ? pendingOld.replace(/^a\//, '').trim() : '';
+      const newP = pendingNew ? pendingNew.replace(/^b\//, '').trim() : '';
+
+      const oldIsDevNull = oldP === '/dev/null';
+      const newIsDevNull = newP === '/dev/null';
+
+      if (!newIsDevNull) {
+        const rel = normalizePatchPath(newP);
+        if (rel && !seen.has(rel)) {
+          seen.add(rel);
+          paths.push(rel);
+        }
+        if (oldIsDevNull) created.add(rel);
+      }
+
+      if (!oldIsDevNull && newIsDevNull) {
+        const rel = normalizePatchPath(oldP);
+        if (rel && !seen.has(rel)) {
+          seen.add(rel);
+          paths.push(rel);
+        }
+        deleted.add(rel);
+      }
+
+      pendingOld = null;
+      pendingNew = null;
+      continue;
+    }
+  }
+
+  return { paths, created, deleted };
+}
+
+async function runCommandWithStdin(
+  cmd: string,
+  cmdArgs: string[],
+  stdinText: string,
+  cwd: string,
+  maxOutBytes: number
+): Promise<{ rc: number; out: string; err: string }> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(cmd, cmdArgs, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+
+    const outChunks: Buffer[] = [];
+    const errChunks: Buffer[] = [];
+    let outSeen = 0;
+    let errSeen = 0;
+    let outCaptured = 0;
+    let errCaptured = 0;
+
+    const pushCapped = (chunks: Buffer[], buf: Buffer, kind: 'out' | 'err') => {
+      const n = buf.length;
+      if (kind === 'out') outSeen += n;
+      else errSeen += n;
+
+      const captured = kind === 'out' ? outCaptured : errCaptured;
+      const remaining = maxOutBytes - captured;
+      if (remaining <= 0) return;
+      const take = n <= remaining ? buf : buf.subarray(0, remaining);
+      chunks.push(Buffer.from(take));
+      if (kind === 'out') outCaptured += take.length;
+      else errCaptured += take.length;
+    };
+
+    child.stdout.on('data', (d) => pushCapped(outChunks, Buffer.from(d), 'out'));
+    child.stderr.on('data', (d) => pushCapped(errChunks, Buffer.from(d), 'err'));
+
+    child.on('error', (e: any) => reject(new Error(`${cmd}: ${e?.message ?? String(e)}`)));
+    child.on('close', (code) => {
+      const outRaw = stripAnsi(Buffer.concat(outChunks).toString('utf8'));
+      const errRaw = stripAnsi(Buffer.concat(errChunks).toString('utf8'));
+
+      const outT = truncateBytes(outRaw, maxOutBytes, outSeen);
+      const errT = truncateBytes(errRaw, maxOutBytes, errSeen);
+
+      resolve({ rc: code ?? 0, out: outT.text, err: errT.text });
+    });
+
+    child.stdin.write(String(stdinText ?? ''), 'utf8');
+    child.stdin.end();
+  });
+}
+
 export async function edit_range(ctx: ToolContext, args: any) {
   const p = resolvePath(ctx, args?.path);
   const startLine = Number(args?.start_line);
   const endLine = Number(args?.end_line);
-  const replacement = typeof args?.replacement === 'string' ? args.replacement : '';
+  const rawReplacement = args?.replacement;
+  const replacement = typeof rawReplacement === 'string' ? rawReplacement
+    : (rawReplacement != null && typeof rawReplacement === 'object' ? JSON.stringify(rawReplacement, null, 2) : undefined);
 
   if (!p) throw new Error('edit_range: missing path');
-  if (!Number.isFinite(startLine) || startLine < 1) throw new Error('edit_range: invalid start_line');
-  if (!Number.isFinite(endLine) || endLine < startLine) throw new Error('edit_range: invalid end_line');
+  if (!Number.isFinite(startLine) || startLine < 1) throw new Error('edit_range: missing/invalid start_line');
+  if (!Number.isFinite(endLine) || endLine < startLine) throw new Error('edit_range: missing/invalid end_line');
+  if (replacement == null) throw new Error('edit_range: missing replacement (got ' + typeof rawReplacement + ')');
 
-  // Path safety check
+  // Path safety check (Phase 9)
   const pathVerdict = checkPathSafety(p);
   if (pathVerdict.tier === 'forbidden') {
     throw new Error(`edit_range: ${pathVerdict.reason}`);
@@ -750,7 +891,7 @@ export async function edit_range(ctx: ToolContext, args: any) {
   if (pathVerdict.tier === 'cautious' && !ctx.noConfirm) {
     if (ctx.confirm) {
       const ok = await ctx.confirm(
-        pathVerdict.prompt || `Edit ${p} (lines ${startLine}-${endLine})?`,
+        pathVerdict.prompt || `Edit range in ${p}?`,
         { tool: 'edit_range', args: { path: p, start_line: startLine, end_line: endLine } }
       );
       if (!ok) throw new Error(`edit_range: cancelled by user (${pathVerdict.reason})`);
@@ -759,148 +900,165 @@ export async function edit_range(ctx: ToolContext, args: any) {
     }
   }
 
+  if (ctx.dryRun) return `dry-run: would edit_range ${p} lines ${startLine}-${endLine} (${Buffer.byteLength(replacement, 'utf8')} bytes)`;
+
+  // Phase 9d: snapshot /etc/ files before editing
   if (ctx.mode === 'sys' && ctx.vault) {
     await snapshotBeforeEdit(ctx.vault, p).catch(() => {});
   }
 
-  const cur = await fs.readFile(p, 'utf8').catch((e: any) => {
+  const beforeText = await fs.readFile(p, 'utf8').catch((e: any) => {
     throw new Error(`edit_range: cannot read ${p}: ${e?.message ?? String(e)}`);
   });
 
-  const lines = cur.split(/\r?\n/);
+  const eol = beforeText.includes('\r\n') ? '\r\n' : '\n';
+  const lines = beforeText.split(/\r?\n/);
 
   if (startLine > lines.length) {
-    throw new Error(`edit_range: start_line ${startLine} exceeds file length (${lines.length} lines)`);
+    throw new Error(`edit_range: start_line ${startLine} out of range (file has ${lines.length} lines)`);
+  }
+  if (endLine > lines.length) {
+    throw new Error(`edit_range: end_line ${endLine} out of range (file has ${lines.length} lines)`);
   }
 
-  const clampedEnd = Math.min(endLine, lines.length);
+  const startIdx = startLine - 1;
+  const deleteCount = endLine - startLine + 1;
 
-  // Build new content: lines before startLine + replacement + lines after endLine
-  const before = lines.slice(0, startLine - 1);
-  const after = lines.slice(clampedEnd);
-  const replacementLines = replacement.split(/\r?\n/);
+  // For deletion, allow empty replacement to remove the range without leaving a blank line.
+  const replacementLines = replacement === '' ? [] : replacement.split(/\r?\n/);
+  lines.splice(startIdx, deleteCount, ...replacementLines);
 
-  const next = [...before, ...replacementLines, ...after].join('\n');
-
-  if (ctx.dryRun) {
-    return `dry-run: would edit ${p} lines ${startLine}-${clampedEnd} (${clampedEnd - startLine + 1} lines → ${replacementLines.length} lines)`;
-  }
+  const out = lines.join(eol);
 
   await backupFile(p, ctx);
-  await atomicWrite(p, next);
+  await atomicWrite(p, out);
   ctx.onMutation?.(p);
 
   const replayNote = await checkpointReplay(ctx, {
-    op: 'edit_file',
+    op: 'edit_range',
     filePath: p,
-    before: Buffer.from(cur, 'utf8'),
-    after: Buffer.from(next, 'utf8')
+    before: Buffer.from(beforeText, 'utf8'),
+    after: Buffer.from(out, 'utf8')
   });
 
   const cwdWarning = checkCwdWarning('edit_range', p, ctx);
-  const delta = replacementLines.length - (clampedEnd - startLine + 1);
-  return `edited ${p} lines ${startLine}-${clampedEnd} → ${replacementLines.length} lines (Δ ${delta >= 0 ? '+' : ''}${delta})${replayNote}${cwdWarning}`;
+  return `edited ${p} lines ${startLine}-${endLine}${replayNote}${cwdWarning}`;
 }
 
-/**
- * apply_patch: Apply a unified diff patch.
- * Uses the system `patch` command for robust handling.
- */
 export async function apply_patch(ctx: ToolContext, args: any) {
-  const patchText = typeof args?.patch === 'string' ? args.patch : '';
-  const files = Array.isArray(args?.files) ? args.files.map((f: any) => String(f)) : [];
-  const strip = Number(args?.strip) || 0;
+  const rawPatch = args?.patch;
+  const patchText = typeof rawPatch === 'string' ? rawPatch
+    : (rawPatch != null && typeof rawPatch === 'object' ? JSON.stringify(rawPatch, null, 2) : undefined);
+
+  const rawFiles = Array.isArray(args?.files) ? args.files : [];
+  const files = rawFiles
+    .map((f: any) => (typeof f === 'string' ? f.trim() : ''))
+    .filter(Boolean);
+
+  const stripRaw = Number(args?.strip);
+  const strip = Number.isFinite(stripRaw) ? Math.max(0, Math.min(5, Math.floor(stripRaw))) : 0;
 
   if (!patchText) throw new Error('apply_patch: missing patch');
-  if (!files.length) throw new Error('apply_patch: missing files array');
+  if (!files.length) throw new Error('apply_patch: missing files[]');
 
-  // Validate all target paths before applying
-  for (const relPath of files) {
-    const absPath = resolvePath(ctx, relPath);
-    const verdict = checkPathSafety(absPath);
-    if (verdict.tier === 'forbidden') {
-      throw new Error(`apply_patch: ${relPath}: ${verdict.reason}`);
-    }
-    if (verdict.tier === 'cautious' && !ctx.noConfirm) {
-      if (ctx.confirm) {
-        const ok = await ctx.confirm(
-          verdict.prompt || `Apply patch to ${relPath}?`,
-          { tool: 'apply_patch', args: { files } }
-        );
-        if (!ok) throw new Error(`apply_patch: cancelled by user (${verdict.reason})`);
-      } else {
-        throw new Error(`apply_patch: ${relPath}: blocked (${verdict.reason}) without --no-confirm/--yolo`);
-      }
+  const touched = extractTouchedFilesFromPatch(patchText);
+  if (!touched.paths.length) {
+    throw new Error('apply_patch: patch contains no recognizable file headers');
+  }
+
+  const declared = new Set(files.map(normalizePatchPath));
+  const unknown = touched.paths.filter((p) => !declared.has(p));
+  if (unknown.length) {
+    throw new Error(`apply_patch: patch touches undeclared file(s): ${unknown.join(', ')}`);
+  }
+
+  const absPaths = touched.paths.map((rel) => resolvePath(ctx, rel));
+
+  // Path safety check (Phase 9)
+  const verdicts = absPaths.map((p) => ({ p, v: checkPathSafety(p) }));
+  const forbidden = verdicts.filter(({ v }) => v.tier === 'forbidden');
+  if (forbidden.length) {
+    throw new Error(`apply_patch: ${forbidden[0].v.reason} (${forbidden[0].p})`);
+  }
+
+  const cautious = verdicts.filter(({ v }) => v.tier === 'cautious');
+  if (cautious.length && !ctx.noConfirm) {
+    if (ctx.confirm) {
+      const preview = patchText.length > 4000 ? patchText.slice(0, 4000) + '\n[truncated]' : patchText;
+      const ok = await ctx.confirm(
+        `Apply patch touching ${touched.paths.length} file(s)?\n- ${touched.paths.join('\n- ')}\n\nProceed? (y/N) `,
+        { tool: 'apply_patch', args: { files: touched.paths, strip }, diff: preview }
+      );
+      if (!ok) throw new Error('apply_patch: cancelled by user');
+    } else {
+      throw new Error('apply_patch: blocked (cautious paths) without --no-confirm/--yolo');
     }
   }
 
+  const maxToolBytes = ctx.maxExecBytes ?? DEFAULT_MAX_EXEC_BYTES;
+  const stripArg = `-p${strip}`;
+
+  // Dry-run: validate the patch applies cleanly, but do not mutate files.
   if (ctx.dryRun) {
-    return `dry-run: would apply patch to ${files.length} file(s): ${files.join(', ')}`;
+    const haveGit = !spawnSync('git', ['--version'], { stdio: 'ignore' }).error;
+    if (haveGit) {
+      const chk = await runCommandWithStdin('git', ['apply', stripArg, '--check', '--whitespace=nowarn'], patchText, ctx.cwd, maxToolBytes);
+      if (chk.rc !== 0) throw new Error(`apply_patch: git apply --check failed:\n${chk.err || chk.out}`);
+    } else {
+      const chk = await runCommandWithStdin('patch', [stripArg, '--dry-run', '--batch'], patchText, ctx.cwd, maxToolBytes);
+      if (chk.rc !== 0) throw new Error(`apply_patch: patch --dry-run failed:\n${chk.err || chk.out}`);
+    }
+    return `dry-run: patch would apply cleanly (${touched.paths.length} files): ${touched.paths.join(', ')}`;
   }
 
-  // Capture pre-image + backup all target files first
-  const beforeByFile = new Map<string, Buffer>();
-  for (const relPath of files) {
-    const absPath = resolvePath(ctx, relPath);
-    const before = await fs.readFile(absPath).catch(() => Buffer.from(''));
-    beforeByFile.set(absPath, before);
-    await backupFile(absPath, ctx).catch(() => {});
+  // Snapshot + backup before applying
+  const beforeMap = new Map<string, Buffer>();
+  for (const abs of absPaths) {
+    // Phase 9d: snapshot /etc/ files before editing
     if (ctx.mode === 'sys' && ctx.vault) {
-      await snapshotBeforeEdit(ctx.vault, absPath).catch(() => {});
+      await snapshotBeforeEdit(ctx.vault, abs).catch(() => {});
     }
+
+    const before = await fs.readFile(abs).catch(() => Buffer.from(''));
+    beforeMap.set(abs, before);
+    await backupFile(abs, ctx);
   }
 
-  // Write patch to temp file and apply via `patch` command
-  const tmpPatch = path.join(ctx.cwd, `.idlehands-patch-${Date.now()}.patch`);
-  await fs.writeFile(tmpPatch, patchText, 'utf8');
+  // Apply with git apply if available; fallback to patch.
+  const haveGit = !spawnSync('git', ['--version'], { stdio: 'ignore' }).error;
+  if (haveGit) {
+    const chk = await runCommandWithStdin('git', ['apply', stripArg, '--check', '--whitespace=nowarn'], patchText, ctx.cwd, maxToolBytes);
+    if (chk.rc !== 0) throw new Error(`apply_patch: git apply --check failed:\n${chk.err || chk.out}`);
 
-  try {
-    const patchArgs = ['patch'];
-    if (strip > 0) patchArgs.push(`-p${strip}`);
-    patchArgs.push('--batch', '--forward', '-i', tmpPatch);
+    const app = await runCommandWithStdin('git', ['apply', stripArg, '--whitespace=nowarn'], patchText, ctx.cwd, maxToolBytes);
+    if (app.rc !== 0) throw new Error(`apply_patch: git apply failed:\n${app.err || app.out}`);
+  } else {
+    const chk = await runCommandWithStdin('patch', [stripArg, '--dry-run', '--batch'], patchText, ctx.cwd, maxToolBytes);
+    if (chk.rc !== 0) throw new Error(`apply_patch: patch --dry-run failed:\n${chk.err || chk.out}`);
 
-    const result = spawnSync(BASH_PATH, ['-lc', patchArgs.map(shellEscape).join(' ')], {
-      cwd: ctx.cwd,
-      encoding: 'utf8',
-      timeout: 30000,
+    const app = await runCommandWithStdin('patch', [stripArg, '--batch'], patchText, ctx.cwd, maxToolBytes);
+    if (app.rc !== 0) throw new Error(`apply_patch: patch failed:\n${app.err || app.out}`);
+  }
+
+  // Replay checkpoints + mutation hooks
+  let replayNotes = '';
+  let cwdWarnings = '';
+  for (const abs of absPaths) {
+    const after = await fs.readFile(abs).catch(() => Buffer.from(''));
+    ctx.onMutation?.(abs);
+
+    const replayNote = await checkpointReplay(ctx, {
+      op: 'apply_patch',
+      filePath: abs,
+      before: beforeMap.get(abs) ?? Buffer.from(''),
+      after
     });
+    replayNotes += replayNote;
 
-    const rc = result.status ?? 1;
-    const out = (result.stdout || '') + (result.stderr || '');
-
-    if (rc !== 0) {
-      // Check if patch was already applied
-      if (out.includes('Reversed (or previously applied) patch detected')) {
-        return `patch already applied to ${files.join(', ')}`;
-      }
-      throw new Error(`apply_patch failed (rc=${rc}):\n${out.slice(0, 1000)}`);
-    }
-
-    // Notify mutations + capture replay checkpoints for changed files
-    let replayNotes = '';
-    const cwdWarnings: string[] = [];
-    for (const relPath of files) {
-      const absPath = resolvePath(ctx, relPath);
-      ctx.onMutation?.(absPath);
-      const before = beforeByFile.get(absPath) ?? Buffer.from('');
-      const after = await fs.readFile(absPath).catch(() => Buffer.from(''));
-      if (!before.equals(after)) {
-        replayNotes += await checkpointReplay(ctx, {
-          op: 'other',
-          filePath: absPath,
-          before,
-          after,
-        });
-      }
-      const warn = checkCwdWarning('apply_patch', absPath, ctx);
-      if (warn) cwdWarnings.push(warn);
-    }
-
-    const cwdWarning = cwdWarnings.length ? cwdWarnings[0] : '';
-    return `applied patch to ${files.join(', ')}${replayNotes}${cwdWarning}`;
-  } finally {
-    await fs.unlink(tmpPatch).catch(() => {});
+    cwdWarnings += checkCwdWarning('apply_patch', abs, ctx);
   }
+
+  return `applied patch (${touched.paths.length} files): ${touched.paths.join(', ')}${replayNotes}${cwdWarnings}`;
 }
 
 export async function list_dir(ctx: ToolContext, args: any) {
