@@ -104,6 +104,35 @@ Capabilities:
 - Slow hook handlers emit warnings when runtime exceeds `warn_ms`.
 - TUI/CLI hook inspector: `/hooks [status|errors|slow|plugins]`.
 
+## Scaffolding a new plugin
+
+From the CLI/TUI session:
+
+```bash
+/plugin init my-plugin
+```
+
+Optional:
+
+```bash
+/plugin init my-plugin ./plugins --force
+```
+
+This creates a starter plugin with `index.ts` + `README.md`.
+
+## Inspector
+
+Use:
+
+```bash
+/hooks
+/hooks plugins
+/hooks errors
+/hooks slow
+```
+
+In TUI, `/hooks ...` opens an inspector overlay so you can browse plugin status/errors quickly.
+
 ## Recommended usage
 
 - Keep hooks fast and side-effect-light.
