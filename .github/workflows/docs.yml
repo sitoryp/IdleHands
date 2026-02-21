@@ -18,6 +18,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +30,7 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
         working-directory: docs
 
       - run: npm run docs:build

@@ -9,6 +9,9 @@ on:
 jobs:
   sweep:
     runs-on: ubuntu-latest
+    env:
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_FUND: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,7 +43,7 @@ jobs:
           gitleaks version
 
       - name: Install dependencies for package checks
-        run: npm ci --include=dev
+        run: npm ci --include=dev --no-audit --no-fund
 
       - name: Run repository security/privacy sweep
         run: ./scripts/security-sweep.sh
