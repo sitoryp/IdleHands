@@ -1,0 +1,49 @@
+export type WatchdogConfigInput = {
+  watchdog_timeout_ms?: number;
+  watchdog_max_compactions?: number;
+  watchdog_idle_grace_timeouts?: number;
+  debug_abort_reason?: boolean;
+};
+
+export type WatchdogSettings = {
+  timeoutMs: number;
+  maxCompactions: number;
+  idleGraceTimeouts: number;
+  debugAbortReason: boolean;
+};
+
+export const WATCHDOG_RECOMMENDED_TUNING_TEXT =
+  'watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.';
+
+export function resolveWatchdogSettings(
+  primary?: WatchdogConfigInput,
+  fallback?: WatchdogConfigInput,
+): WatchdogSettings {
+  const timeoutMs = Math.max(
+    30_000,
+    Math.floor(primary?.watchdog_timeout_ms ?? fallback?.watchdog_timeout_ms ?? 120_000),
+  );
+  const maxCompactions = Math.max(
+    0,
+    Math.floor(primary?.watchdog_max_compactions ?? fallback?.watchdog_max_compactions ?? 3),
+  );
+  const idleGraceTimeouts = Math.max(
+    0,
+    Math.floor(primary?.watchdog_idle_grace_timeouts ?? fallback?.watchdog_idle_grace_timeouts ?? 1),
+  );
+
+  return {
+    timeoutMs,
+    maxCompactions,
+    idleGraceTimeouts,
+    debugAbortReason: (primary?.debug_abort_reason ?? fallback?.debug_abort_reason) === true,
+  };
+}
+
+export function shouldRecommendWatchdogTuning(settings: WatchdogSettings): boolean {
+  return (
+    (settings.timeoutMs <= 90_000 && settings.idleGraceTimeouts === 0) ||
+    settings.timeoutMs <= 60_000 ||
+    settings.maxCompactions === 0
+  );
+}

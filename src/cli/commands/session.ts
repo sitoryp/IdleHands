@@ -12,6 +12,7 @@ import {
   saveSessionFile, listSavedSessions, listConversationBranches,
 } from '../session-state.js';
 import { err as errFmt } from '../../term.js';
+import { WATCHDOG_RECOMMENDED_TUNING_TEXT, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../../watchdog.js';
 
 export const sessionCommands: SlashCommand[] = [
   {
@@ -71,26 +72,19 @@ export const sessionCommands: SlashCommand[] = [
         return true;
       }
 
-      const timeoutMs = Math.max(30_000, Math.floor(ctx.config.watchdog_timeout_ms ?? 120_000));
-      const maxCompactions = Math.max(0, Math.floor(ctx.config.watchdog_max_compactions ?? 3));
-      const grace = Math.max(0, Math.floor(ctx.config.watchdog_idle_grace_timeouts ?? 1));
-      const debug = ctx.config.debug_abort_reason === true;
+      const settings = resolveWatchdogSettings(undefined, ctx.config);
 
       const lines = [
         'Watchdog Status',
-        `Timeout: ${timeoutMs.toLocaleString()} ms (${Math.round(timeoutMs / 1000)}s)`,
-        `Max compactions: ${maxCompactions}`,
-        `Grace windows: ${grace}`,
-        `Debug abort reason: ${debug ? 'on' : 'off'}`,
+        `Timeout: ${settings.timeoutMs.toLocaleString()} ms (${Math.round(settings.timeoutMs / 1000)}s)`,
+        `Max compactions: ${settings.maxCompactions}`,
+        `Grace windows: ${settings.idleGraceTimeouts}`,
+        `Debug abort reason: ${settings.debugAbortReason ? 'on' : 'off'}`,
       ];
 
-      const aggressive =
-        (timeoutMs <= 90_000 && grace === 0) ||
-        timeoutMs <= 60_000 ||
-        maxCompactions === 0;
-      if (aggressive) {
+      if (shouldRecommendWatchdogTuning(settings)) {
         lines.push('');
-        lines.push('Recommended tuning: watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.');
+        lines.push(`Recommended tuning: ${WATCHDOG_RECOMMENDED_TUNING_TEXT}`);
       }
 
       console.log(lines.join('\n'));

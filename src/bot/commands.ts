@@ -13,6 +13,7 @@ import { parseTaskFile } from '../anton/parser.js';
 import { formatRunSummary, formatProgressBar, formatTaskStart, formatTaskEnd, formatTaskSkip } from '../anton/reporter.js';
 import type { AntonRunConfig, AntonProgressCallback } from '../anton/types.js';
 import { projectDir } from '../utils.js';
+import { WATCHDOG_RECOMMENDED_TUNING_TEXT, shouldRecommendWatchdogTuning, type WatchdogSettings } from '../watchdog.js';
 
 import type { BotTelegramConfig } from '../types.js';
 
@@ -24,12 +25,7 @@ type CommandContext = {
     endpoint?: string;
     defaultDir?: string;
     telegram?: BotTelegramConfig;
-    watchdog?: {
-      timeoutMs: number;
-      maxCompactions: number;
-      idleGraceTimeouts: number;
-      debugAbortReason: boolean;
-    };
+    watchdog?: WatchdogSettings;
   };
 };
 
@@ -148,13 +144,9 @@ export async function handleWatchdog({ ctx, sessions, botConfig }: CommandContex
     `<b>Debug abort reason:</b> ${cfg.debugAbortReason ? 'on' : 'off'}`,
   ];
 
-  const aggressive =
-    (cfg.timeoutMs <= 90_000 && cfg.idleGraceTimeouts === 0) ||
-    cfg.timeoutMs <= 60_000 ||
-    cfg.maxCompactions === 0;
-  if (aggressive) {
+  if (shouldRecommendWatchdogTuning(cfg)) {
     lines.push('');
-    lines.push(`<b>Recommended tuning:</b> ${escapeHtml('watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.')}`);
+    lines.push(`<b>Recommended tuning:</b> ${escapeHtml(WATCHDOG_RECOMMENDED_TUNING_TEXT)}`);
   }
 
   if (managed) {

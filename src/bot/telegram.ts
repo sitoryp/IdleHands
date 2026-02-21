@@ -15,6 +15,7 @@ import {
   handleAnton, handleAgent, handleAgents, handleEscalate, handleDeescalate,
 } from './commands.js';
 import { TelegramConfirmProvider } from './confirm-telegram.js';
+import { resolveWatchdogSettings } from '../watchdog.js';
 
 // ---------------------------------------------------------------------------
 // Escalation helpers (mirrored from discord.ts)
@@ -392,10 +393,11 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   );
   const editIntervalMs = botConfig.edit_interval_ms ?? 1500;
   const replyToUserMessages = botConfig.reply_to_user_messages === true;
-  const watchdogMs = Math.max(30_000, Math.floor(botConfig.watchdog_timeout_ms ?? config.watchdog_timeout_ms ?? 120_000));
-  const maxWatchdogCompacts = Math.max(0, Math.floor(botConfig.watchdog_max_compactions ?? config.watchdog_max_compactions ?? 3));
-  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(botConfig.watchdog_idle_grace_timeouts ?? config.watchdog_idle_grace_timeouts ?? 1));
-  const debugAbortReason = (botConfig.debug_abort_reason ?? config.debug_abort_reason) === true;
+  const watchdogSettings = resolveWatchdogSettings(botConfig, config);
+  const watchdogMs = watchdogSettings.timeoutMs;
+  const maxWatchdogCompacts = watchdogSettings.maxCompactions;
+  const watchdogIdleGraceTimeouts = watchdogSettings.idleGraceTimeouts;
+  const debugAbortReason = watchdogSettings.debugAbortReason;
 
   // Override default_dir from env
   if (process.env.IDLEHANDS_TG_DIR) {
@@ -990,10 +992,19 @@ async function processMessage(
     },
   };
 
-  const watchdogMs = Math.max(30_000, Math.floor(watchdogOptions?.timeoutMs ?? baseConfig?.watchdog_timeout_ms ?? 120_000));
-  const maxWatchdogCompacts = Math.max(0, Math.floor(watchdogOptions?.maxCompactions ?? baseConfig?.watchdog_max_compactions ?? 3));
-  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(watchdogOptions?.idleGraceTimeouts ?? baseConfig?.watchdog_idle_grace_timeouts ?? 1));
-  const debugAbortReason = watchdogOptions?.debugAbortReason === true || baseConfig?.debug_abort_reason === true;
+  const resolvedWatchdog = resolveWatchdogSettings(
+    {
+      watchdog_timeout_ms: watchdogOptions?.timeoutMs,
+      watchdog_max_compactions: watchdogOptions?.maxCompactions,
+      watchdog_idle_grace_timeouts: watchdogOptions?.idleGraceTimeouts,
+      debug_abort_reason: watchdogOptions?.debugAbortReason,
+    },
+    baseConfig,
+  );
+  const watchdogMs = resolvedWatchdog.timeoutMs;
+  const maxWatchdogCompacts = resolvedWatchdog.maxCompactions;
+  const watchdogIdleGraceTimeouts = resolvedWatchdog.idleGraceTimeouts;
+  const debugAbortReason = resolvedWatchdog.debugAbortReason;
   let watchdogCompactPending = false;
   let watchdogGraceUsed = 0;
   let watchdogForcedCancel = false;

@@ -9,6 +9,7 @@ import { saveSessionFile, lastSessionPath, projectSessionPath } from "../cli/ses
 import { loadBranches, executeBranchSelect } from "./branch-picker.js";
 import { ensureCommandsRegistered, allCommandNames, runShellCommand, runSlashCommand } from "./command-handler.js";
 import { projectDir } from "../utils.js";
+import { resolveWatchdogSettings } from "../watchdog.js";
 import type { TuiState } from "./types.js";
 import { TuiConfirmProvider } from "./confirm.js";
 
@@ -213,10 +214,11 @@ export class TuiController {
     this.watchdogCompactAttempts = 0;
     this.dispatch({ type: "AGENT_STREAM_START", id });
 
-    const watchdogMs = Math.max(30_000, Math.floor(this.config.watchdog_timeout_ms ?? 120_000));
-    const maxWatchdogCompacts = Math.max(0, Math.floor(this.config.watchdog_max_compactions ?? 3));
-    const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(this.config.watchdog_idle_grace_timeouts ?? 1));
-    const debugAbortReason = this.config.debug_abort_reason === true;
+    const watchdogSettings = resolveWatchdogSettings(undefined, this.config);
+    const watchdogMs = watchdogSettings.timeoutMs;
+    const maxWatchdogCompacts = watchdogSettings.maxCompactions;
+    const watchdogIdleGraceTimeouts = watchdogSettings.idleGraceTimeouts;
+    const debugAbortReason = watchdogSettings.debugAbortReason;
     let watchdogCompactPending = false;
     let watchdogGraceUsed = 0;
     let watchdogForcedCancel = false;
