@@ -5,8 +5,6 @@
 
 import type { AgentSession } from '../agent.js';
 import type { IdlehandsConfig } from '../types.js';
-import type { TranscriptItem } from './types.js';
-import type { TuiEvent } from './events.js';
 import { registerAll, findCommand, allCommandNames } from '../cli/command-registry.js';
 import { sessionCommands } from '../cli/commands/session.js';
 import { runtimeCommands } from '../cli/commands/runtime.js';

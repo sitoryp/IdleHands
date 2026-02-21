@@ -1,4 +1,5 @@
 import type { ReplContext } from './repl-context.js';
+import { firstToken } from './command-utils.js';
 
 export interface SlashCommand {
   name: string;
@@ -19,7 +20,7 @@ export function registerAll(cmds: SlashCommand[]): void {
 }
 
 export function findCommand(line: string): SlashCommand | null {
-  const head = (line.trim().split(/\s+/)[0] || '').toLowerCase();
+  const head = firstToken(line);
   if (!head.startsWith('/')) return null;
   return registry.get(head) ?? null;
 }

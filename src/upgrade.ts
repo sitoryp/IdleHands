@@ -148,13 +148,6 @@ function resolveGitHubToken(): string | null {
 
 export type InstallSource = 'github' | 'npm' | 'unknown';
 
-interface UpdateConfig {
-  /** Where idlehands was installed from. Auto-detected if not set. */
-  install_source?: InstallSource;
-  /** Check for updates automatically (once per day on REPL start). Default: true */
-  auto_update_check?: boolean;
-}
-
 interface VersionInfo {
   current: string;
   latest: string;

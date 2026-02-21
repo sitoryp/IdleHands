@@ -12,8 +12,6 @@ import type {
   AntonProgress, 
   AntonAttempt, 
   AntonStopReason,
-  AntonTask,
-  AntonTaskFile,
   AntonAttemptStatus
 } from './types.js';
 import type { IdlehandsConfig } from '../types.js';
@@ -24,7 +22,6 @@ import {
   parseTaskFile, 
   findRunnablePendingTasks, 
   markTaskChecked, 
-  appendTaskNote, 
   insertSubTasks, 
   autoCompleteAncestors 
 } from './parser.js';
@@ -37,11 +34,9 @@ import {
   ensureCleanWorkingTree, 
   getWorkingDiff, 
   commitAll, 
-  commitAmend, 
   restoreTrackedChanges, 
   cleanUntracked, 
-  createBranch, 
-  isGitDirty 
+  createBranch 
 } from '../git.js';
 
 export interface RunAntonOpts {
@@ -68,7 +63,7 @@ export async function runAnton(opts: RunAntonOpts): Promise<AntonRunResult> {
   let totalCommits = 0;
   let iterationsUsed = 0;
   const attempts: AntonAttempt[] = [];
-  let taskRetryCount: Map<string, number> = new Map();
+  const taskRetryCount: Map<string, number> = new Map();
   
   // SIGINT handler
   const handleAbort = () => {

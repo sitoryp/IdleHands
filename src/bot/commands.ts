@@ -8,11 +8,11 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import type { SessionManager } from './session-manager.js';
 import { escapeHtml } from './format.js';
+import { firstToken } from '../cli/command-utils.js';
 import { runAnton } from '../anton/controller.js';
 import { parseTaskFile } from '../anton/parser.js';
 import { formatRunSummary, formatProgressBar, formatTaskStart, formatTaskEnd, formatTaskSkip } from '../anton/reporter.js';
 import type { AntonRunConfig, AntonProgressCallback } from '../anton/types.js';
-import { projectDir } from '../utils.js';
 import { WATCHDOG_RECOMMENDED_TUNING_TEXT, resolveWatchdogSettings, shouldRecommendWatchdogTuning, type WatchdogSettings } from '../watchdog.js';
 
 import type { BotTelegramConfig } from '../types.js';
@@ -414,7 +414,7 @@ export async function handleAnton({ ctx, sessions }: CommandContext): Promise<vo
 
   const text = ctx.message?.text ?? '';
   const args = text.replace(/^\/anton\s*/, '').trim();
-  const sub = args.split(/\s+/)[0]?.toLowerCase() || '';
+  const sub = firstToken(args);
 
   const managed = sessions.get(chatId);
 
@@ -577,7 +577,7 @@ export async function handleAnton({ ctx, sessions }: CommandContext): Promise<vo
 
 // ── Multi-agent commands ───────────────────────────────────────────────
 
-export async function handleAgent({ ctx, sessions, botConfig }: CommandContext): Promise<void> {
+export async function handleAgent({ ctx, sessions, botConfig: _botConfig }: CommandContext): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const managed = sessions.get(chatId);

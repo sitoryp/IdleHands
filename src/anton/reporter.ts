@@ -90,7 +90,7 @@ export function formatTaskStart(task: AntonTask, attempt: number, progress: Anto
 /**
  * Format task end message.
  */
-export function formatTaskEnd(task: AntonTask, result: AntonAttempt, progress: AntonProgress): string {
+export function formatTaskEnd(task: AntonTask, result: AntonAttempt, _progress: AntonProgress): string {
   const emoji = result.status === 'passed' ? '✅' : '❌';
   const duration = formatDuration(result.durationMs);
   const tokens = formatTokens(result.tokensUsed);

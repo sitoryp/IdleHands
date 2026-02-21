@@ -14,8 +14,6 @@ type AntonLock = {
   taskFile: string;
 };
 
-let currentLock: AntonLock | null = null;
-
 function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -67,7 +65,6 @@ async function writeLock(taskFile: string, cwd: string): Promise<void> {
     taskFile,
   };
   await fs.writeFile(lockPath(), JSON.stringify(payload), { encoding: 'utf8', flag: 'wx' });
-  currentLock = payload;
 }
 
 async function removeLock(): Promise<void> {
@@ -76,7 +73,6 @@ async function removeLock(): Promise<void> {
   } catch {
     // best effort
   }
-  currentLock = null;
 }
 
 export async function acquireAntonLock(taskFile: string, cwd: string): Promise<void> {

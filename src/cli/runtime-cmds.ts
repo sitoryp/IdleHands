@@ -12,6 +12,7 @@ import {
   interpolateTemplate,
 } from '../runtime/store.js';
 import { configDir, shellEscape } from '../utils.js';
+import { firstToken } from './command-utils.js';
 
 function runtimesFilePath(): string {
   return path.join(configDir(), 'runtimes.json');
@@ -238,10 +239,10 @@ export async function runHostsSubcommand(args: any, _config: any): Promise<void>
         source: '',
         port: '',
       });
-      const firstToken = checkCmd.trim().split(/\s+/)[0] || '';
-      if (firstToken) {
-        const checkBin = runLocalCommand(`command -v ${shellEscape(firstToken)} >/dev/null 2>&1`, 3);
-        if (!checkBin.ok) problems.push(`[${host.id}] missing local binary: ${firstToken}`);
+      const commandToken = firstToken(checkCmd);
+      if (commandToken) {
+        const checkBin = runLocalCommand(`command -v ${shellEscape(commandToken)} >/dev/null 2>&1`, 3);
+        if (!checkBin.ok) problems.push(`[${host.id}] missing local binary: ${commandToken}`);
       }
     }
 
@@ -382,7 +383,7 @@ export async function runBackendsSubcommand(args: any, _config: any): Promise<vo
       if (!b.enabled) continue;
       for (const c of [b.apply_cmd, b.verify_cmd, b.rollback_cmd]) {
         if (!c) continue;
-        const token = c.trim().split(/\s+/)[0] || '';
+        const token = firstToken(c);
         if (!token) continue;
         const bin = runLocalCommand(`command -v ${shellEscape(token)} >/dev/null 2>&1`, 2);
         if (!bin.ok) problems.push(`[${b.id}] missing local binary: ${token}`);
@@ -619,7 +620,7 @@ export async function runModelsSubcommand(args: any, _config: any): Promise<void
         for (const b of m.backend_policy) if (!backendIds.has(b)) problems.push(`[${m.id}] unknown backend in backend_policy: ${b}`);
       }
       for (const c of [m.launch.start_cmd, m.launch.probe_cmd]) {
-        const token = c.trim().split(/\s+/)[0] || '';
+        const token = firstToken(c);
         const bin = runLocalCommand(`command -v ${shellEscape(token)} >/dev/null 2>&1`, 2);
         if (!bin.ok) problems.push(`[${m.id}] missing local binary: ${token}`);
       }
@@ -913,7 +914,6 @@ export async function runHealthSubcommand(_args: any, _config: any): Promise<voi
           probeCmd = model.launch.probe_cmd;
         }
 
-        const label = `${model.id} on ${host.id} (${probeCmd})`;
         const timeoutMs = (model.launch.probe_timeout_sec ?? 60) * 1000;
 
         process.stdout.write(`  ${model.display_name} on ${host.id}... `);

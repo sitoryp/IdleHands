@@ -11,8 +11,9 @@ import { loadBranches, executeBranchSelect } from "./branch-picker.js";
 import { ensureCommandsRegistered, allCommandNames, runShellCommand, runSlashCommand } from "./command-handler.js";
 import { projectDir } from "../utils.js";
 import { formatWatchdogCancelMessage, resolveWatchdogSettings } from "../watchdog.js";
-import type { SettingsMenuItem, StepNavigatorItem, TuiState } from "./types.js";
+import type { SettingsMenuItem, StepNavigatorItem } from "./types.js";
 import { TuiConfirmProvider } from "./confirm.js";
+import { splitTokens } from '../cli/command-utils.js';
 
 const THEME_OPTIONS = ['default', 'dark', 'light', 'minimal', 'hacker'] as const;
 const APPROVAL_OPTIONS = ['plan', 'default', 'auto-edit', 'yolo'] as const;
@@ -357,7 +358,8 @@ export class TuiController {
 
   /** Handle a slash command. Returns true if handled. */
   private async handleSlashCommand(line: string): Promise<boolean> {
-    const head = (line.trim().split(/\s+/)[0] || "").toLowerCase();
+    const parts = splitTokens(line);
+    const head = (parts[0] || "").toLowerCase();
     if (!head.startsWith("/")) return false;
 
     ensureCommandsRegistered();
@@ -383,7 +385,6 @@ export class TuiController {
       return true;
     }
     if (head === "/branches") {
-      const parts = line.trim().split(/\s+/);
       const sub = (parts[1] || '').toLowerCase();
       const action = sub === 'checkout' ? 'checkout' as const : sub === 'merge' ? 'merge' as const : 'browse' as const;
       await this.openBranchPicker(action);

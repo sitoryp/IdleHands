@@ -12,6 +12,7 @@ import {
   saveSessionFile, listSavedSessions, listConversationBranches,
 } from '../session-state.js';
 import { err as errFmt } from '../../term.js';
+import { restTokens } from '../command-utils.js';
 import { WATCHDOG_RECOMMENDED_TUNING_TEXT, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../../watchdog.js';
 import { scaffoldHookPlugin } from '../../hooks/index.js';
 
@@ -159,7 +160,7 @@ export const sessionCommands: SlashCommand[] = [
     name: '/plugin',
     description: 'Scaffold hook plugins (/plugin init <name> [dir] [--force])',
     async execute(ctx, args) {
-      const parts = args.split(/\s+/).filter(Boolean);
+      const parts = restTokens(args);
       const sub = (parts[0] || '').toLowerCase();
 
       if (!sub || sub === 'help') {
@@ -312,7 +313,7 @@ export const sessionCommands: SlashCommand[] = [
   {
     name: '/sessions',
     description: 'List saved named sessions',
-    async execute(ctx) {
+    async execute(_ctx) {
       const rows = await listSavedSessions();
       if (!rows.length) {
         console.log('No saved named sessions.');
@@ -328,9 +329,9 @@ export const sessionCommands: SlashCommand[] = [
   {
     name: '/conv',
     description: 'Conversation branches',
-    async execute(ctx, args, line) {
-      const parts = line.split(/\s+/).filter(Boolean);
-      const sub = (parts[1] || '').toLowerCase();
+    async execute(ctx, _args, line) {
+      const parts = restTokens(line);
+      const sub = (parts[0] || '').toLowerCase();
 
       if (!sub || sub === 'help') {
         console.log('Usage: /conv branch <name> | /conv branches | /conv checkout <name> | /conv merge <name>');
@@ -338,7 +339,7 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       if (sub === 'branch') {
-        const name = (parts[2] || '').trim();
+        const name = (parts[1] || '').trim();
         if (!name) { console.log('Usage: /conv branch <name>'); return true; }
         if (!isSafeBranchName(name)) {
           console.log('Invalid branch name. Allowed: letters, numbers, dot, underscore, hyphen.');
@@ -372,7 +373,7 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       if (sub === 'checkout') {
-        const name = (parts[2] || '').trim();
+        const name = (parts[1] || '').trim();
         if (!name) { console.log('Usage: /conv checkout <name>'); return true; }
         if (!isSafeBranchName(name)) { console.log('Invalid branch name.'); return true; }
         const filePath = conversationBranchPath(name);
@@ -400,7 +401,7 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       if (sub === 'merge') {
-        const name = (parts[2] || '').trim();
+        const name = (parts[1] || '').trim();
         if (!name) { console.log('Usage: /conv merge <name>'); return true; }
         if (!isSafeBranchName(name)) { console.log('Invalid branch name.'); return true; }
         const filePath = conversationBranchPath(name);

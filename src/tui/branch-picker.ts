@@ -4,7 +4,6 @@
  */
 
 import type { BranchPickerItem } from './types.js';
-import type { TuiEvent } from './events.js';
 import { listConversationBranches, conversationBranchPath } from '../cli/session-state.js';
 import type { AgentSession } from '../agent.js';
 import fs from 'node:fs/promises';
