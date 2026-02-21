@@ -13,6 +13,7 @@ import {
 } from '../session-state.js';
 import { err as errFmt } from '../../term.js';
 import { WATCHDOG_RECOMMENDED_TUNING_TEXT, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../../watchdog.js';
+import { scaffoldHookPlugin } from '../../hooks/index.js';
 
 export const sessionCommands: SlashCommand[] = [
   {
@@ -30,7 +31,7 @@ export const sessionCommands: SlashCommand[] = [
     async execute(ctx) {
       console.log(
         ctx.S.dim('Commands: ') +
-          '/help /quit /edit [seed text] /about /mode [code|sys] /status /watchdog [status] /hooks [status|errors|slow|plugins] /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
+          '/help /quit /edit [seed text] /about /mode [code|sys] /status /watchdog [status] /hooks [status|errors|slow|plugins] /plugin init <name> [dir] [--force] /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
           '\n' + ctx.S.dim('Shell: !<cmd> run once, !!<cmd> run + inject output, ! toggles shell mode') +
           '\n' + ctx.S.dim('Templates: /fix /review /test /explain /refactor, plus custom markdown commands in ~/.config/idlehands/commands/')
       );
@@ -151,6 +152,55 @@ export const sessionCommands: SlashCommand[] = [
         `Recent slow handlers: ${snap.recentSlowHandlers.length}`,
       ];
       console.log(lines.join('\n'));
+      return true;
+    },
+  },
+  {
+    name: '/plugin',
+    description: 'Scaffold hook plugins (/plugin init <name> [dir] [--force])',
+    async execute(ctx, args) {
+      const parts = args.split(/\s+/).filter(Boolean);
+      const sub = (parts[0] || '').toLowerCase();
+
+      if (!sub || sub === 'help') {
+        console.log('Usage: /plugin init <name> [dir] [--force]');
+        return true;
+      }
+
+      if (sub !== 'init') {
+        console.log('Usage: /plugin init <name> [dir] [--force]');
+        return true;
+      }
+
+      const name = (parts[1] || '').trim();
+      if (!name) {
+        console.log('Usage: /plugin init <name> [dir] [--force]');
+        return true;
+      }
+
+      const force = parts.includes('--force');
+      const dirArg = parts.find((p, i) => i >= 2 && p !== '--force');
+      const baseDir = dirArg
+        ? path.resolve(ctx.config.dir || process.cwd(), dirArg)
+        : path.resolve(ctx.config.dir || process.cwd(), 'plugins');
+
+      try {
+        const result = await scaffoldHookPlugin({
+          pluginName: name,
+          baseDir,
+          force,
+        });
+
+        console.log(`Scaffolded plugin '${result.pluginName}' at ${result.targetDir}`);
+        for (const f of result.files) console.log(`  - ${f}`);
+        console.log('\nNext steps:');
+        console.log(`1) Build plugin TS to JS (example target: ${path.join(result.targetDir, 'dist/index.js')})`);
+        console.log('2) Add plugin path to config.hooks.plugin_paths');
+        console.log('3) Restart Idle Hands');
+      } catch (e: any) {
+        console.error(errFmt(`PLUGIN: ${e?.message ?? String(e)}`, ctx.S));
+      }
+
       return true;
     },
   },

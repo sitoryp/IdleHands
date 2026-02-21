@@ -19,6 +19,7 @@ idlehands setup
 - `dir`: working directory
 - `max_tokens`, `temperature`, `top_p`
 - `timeout`, `max_iterations`, `response_timeout`, `connection_timeout`
+- `initial_connection_check`, `initial_connection_timeout`
 - `approval_mode`: `plan/reject/default/auto-edit/yolo`
 - `mode`: `code` or `sys`
 - `context_window`, `context_max_tokens`
