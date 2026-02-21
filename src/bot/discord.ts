@@ -31,6 +31,8 @@ import { runAnton } from '../anton/controller.js';
 import { parseTaskFile } from '../anton/parser.js';
 import { formatRunSummary, formatProgressBar, formatTaskStart, formatTaskEnd, formatTaskSkip } from '../anton/reporter.js';
 import type { AntonRunConfig, AntonProgressCallback } from '../anton/types.js';
+import { DiscordStreamingMessage } from './discord-streaming.js';
+import { chainAgentHooks } from '../progress/agent-hooks.js';
 
 type SessionState = 'idle' | 'running' | 'canceling' | 'resetting';
 
@@ -385,16 +387,21 @@ When you escalate, your request will be re-run on a more capable model.`;
     }
 
     const placeholder = await sendUserVisible(msg, '⏳ Thinking...').catch(() => null);
-    let streamed = '';
+    const streamer = new DiscordStreamingMessage(placeholder, msg.channel, { editIntervalMs: 1500 });
+    streamer.start();
 
-    const hooks: AgentHooks = {
-      onToken: (t) => {
+    const baseHooks: AgentHooks = {
+      onToken: () => {
         if (!isTurnActive(managed, turnId)) return;
         markProgress(managed, turnId);
         watchdogGraceUsed = 0;
-        streamed += t;
       },
       onToolCall: () => {
+        if (!isTurnActive(managed, turnId)) return;
+        markProgress(managed, turnId);
+        watchdogGraceUsed = 0;
+      },
+      onToolStream: () => {
         if (!isTurnActive(managed, turnId)) return;
         markProgress(managed, turnId);
         watchdogGraceUsed = 0;
@@ -422,9 +429,7 @@ When you escalate, your request will be re-run on a more capable model.`;
           watchdogGraceUsed += 1;
           managed.lastProgressAt = Date.now();
           console.error(`[bot:discord] ${managed.userId} watchdog inactivity on turn ${turnId} — applying grace period (${watchdogGraceUsed}/${watchdogIdleGraceTimeouts})`);
-          if (placeholder) {
-            void placeholder.edit('⏳ Still working... model is taking longer than usual.').catch(() => {});
-          }
+          streamer.setBanner('⏳ Still working... model is taking longer than usual.');
           return;
         }
 
@@ -458,18 +463,19 @@ When you escalate, your request will be re-run on a more capable model.`;
         const attemptController = new AbortController();
         managed.activeAbortController = attemptController;
         turn.controller = attemptController;
-        streamed = '';
 
         const askText = isRetryAfterCompaction
           ? 'Continue working on the task from where you left off. Context was compacted to free memory — do NOT restart from the beginning.'
           : msg.content;
 
+        const hooks = chainAgentHooks({ signal: attemptController.signal }, baseHooks, streamer.hooks());
+
         try {
-          const result = await managed.session.ask(askText, { ...hooks, signal: attemptController.signal });
+          const result = await managed.session.ask(askText, hooks);
           askComplete = true;
           if (!isTurnActive(managed, turnId)) return;
           markProgress(managed, turnId);
-          const finalText = safeContent(streamed || result.text);
+          const finalText = safeContent(result.text);
 
           // Check for auto-escalation request in response
           const escalation = managed.agentPersona?.escalation;
@@ -487,10 +493,7 @@ When you escalate, your request will be re-run on a more capable model.`;
 
               console.error(`[bot:discord] ${managed.userId} auto-escalation requested: ${escResult.reason}${tierEndpoint ? ` @ ${tierEndpoint}` : ''}`);
 
-              // Update placeholder with escalation notice
-              if (placeholder) {
-                await placeholder.edit(`⚡ Escalating to \`${targetModel}\` (${escResult.reason})...`).catch(() => {});
-              }
+              await streamer.finalizeError(`⚡ Escalating to \`${targetModel}\` (${escResult.reason})...`);
 
               // Set up escalation for re-run
               managed.pendingEscalation = targetModel;
@@ -515,30 +518,14 @@ When you escalate, your request will be re-run on a more capable model.`;
             }
           }
 
-          const chunks = splitDiscord(finalText);
-
-          if (placeholder) {
-            await placeholder.edit(chunks[0]).catch(() => {});
-          } else {
-            await sendUserVisible(msg, chunks[0]).catch(() => {});
-          }
-
-          for (let i = 1; i < chunks.length && i < 10; i++) {
-            if (!isTurnActive(managed, turnId)) break;
-            await (msg.channel as any).send(chunks[i]).catch(() => {});
-          }
-          if (chunks.length > 10 && isTurnActive(managed, turnId)) {
-            await (msg.channel as any).send('[truncated — response too long]').catch(() => {});
-          }
+          await streamer.finalize(finalText);
         } catch (e: any) {
           const raw = String(e?.message ?? e ?? 'unknown error');
           const isAbort = raw.includes('AbortError') || raw.toLowerCase().includes('aborted');
 
           // If aborted by watchdog compaction, wait for compaction to finish then retry
           if (isAbort && watchdogCompactPending) {
-            if (placeholder) {
-              await placeholder.edit(`🔄 Context too large — compacting and retrying (attempt ${managed.watchdogCompactAttempts}/${maxWatchdogCompacts})...`).catch(() => {});
-            }
+            streamer.setBanner(`🔄 Context too large — compacting and retrying (attempt ${managed.watchdogCompactAttempts}/${maxWatchdogCompacts})...`);
             // Wait for the async compaction to complete
             while (watchdogCompactPending) {
               await new Promise((r) => setTimeout(r, 500));
@@ -558,21 +545,17 @@ When you escalate, your request will be re-run on a more capable model.`;
               abortReason: raw,
               prefix: '⏹ ',
             });
-            if (placeholder) await placeholder.edit(cancelMsg).catch(() => {});
-            else await sendUserVisible(msg, cancelMsg).catch(() => {});
+            await streamer.finalizeError(cancelMsg);
           } else {
             const errMsg = raw.slice(0, 400);
-            if (placeholder) {
-              await placeholder.edit(`❌ ${errMsg}`).catch(() => {});
-            } else {
-              await sendUserVisible(msg, `❌ ${errMsg}`).catch(() => {});
-            }
+            await streamer.finalizeError(errMsg);
           }
           askComplete = true;
         }
       }
     } finally {
       clearInterval(watchdog);
+      streamer.stop();
       finishTurn(managed, turnId);
 
       // Auto-deescalate back to base model after each request

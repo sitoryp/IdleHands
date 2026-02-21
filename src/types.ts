@@ -543,6 +543,17 @@ export type ToolResultEvent = {
   searchMatches?: string[];
 };
 
+export type ToolStreamEvent = {
+  /** tool call id (same as ToolCallEvent.id / ToolResultEvent.id) */
+  id: string;
+  /** tool name (e.g. "exec") */
+  name: string;
+  /** where the chunk came from */
+  stream: 'stdout' | 'stderr';
+  /** text chunk (UTF-8, safe for display) */
+  chunk: string;
+};
+
 export type TurnEndEvent = {
   turn: number;
   toolCalls: number;

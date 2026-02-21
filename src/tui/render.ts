@@ -23,7 +23,9 @@ function secs(ms: number): string {
 function formatToolUsage(e: ToolEvent): string {
   const durationMs = typeof e.durationMs === 'number' ? e.durationMs : Math.max(0, Date.now() - e.ts);
   const icon = e.phase === 'error' ? `${C.red}✗${C.reset}` : e.phase === 'end' ? `${C.green}✓${C.reset}` : `${C.yellow}⠋${C.reset}`;
-  return `${icon} ${e.name} (${secs(durationMs)})`;
+  const base = `${icon} ${e.name} (${secs(durationMs)})`;
+  if (e.phase === 'start' && e.detail) return `${base} — ${truncate(e.detail, 70)}`;
+  return base;
 }
 
 function rolePrefix(role: string): string {
@@ -248,8 +250,17 @@ export function renderTui(state: TuiState): void {
   const newerBelow = scrollBack;
 
   const alert = state.alerts[state.alerts.length - 1];
+  const statusText = state.statusText;
   const scrollStatus = newerBelow > 0 ? `↓${newerBelow} more` : olderAbove > 0 ? `↑${olderAbove} more` : '';
-  if (alert) {
+
+  const showAlert = alert && (alert.level === 'warn' || alert.level === 'error');
+  if (showAlert && alert) {
+    const color = alert.level === 'error' ? C.red : C.yellow;
+    const alertText = `${color}[${alert.level}]${C.reset} ${alert.text}`;
+    process.stdout.write(placeRight(alertText, scrollStatus, cols) + '\n');
+  } else if (statusText) {
+    process.stdout.write(placeRight(statusText, scrollStatus, cols) + '\n');
+  } else if (alert) {
     const color = alert.level === 'error' ? C.red : alert.level === 'warn' ? C.yellow : C.dim;
     const alertText = `${color}[${alert.level}]${C.reset} ${alert.text}`;
     process.stdout.write(placeRight(alertText, scrollStatus, cols) + '\n');

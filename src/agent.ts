@@ -1,4 +1,4 @@
-import type { IdlehandsConfig, ChatMessage, UserContent, ToolSchema, ToolCall, TrifectaMode, ToolCallEvent, ToolResultEvent, TurnEndEvent, ConfirmationProvider, PlanStep, ApprovalMode } from './types.js';
+import type { IdlehandsConfig, ChatMessage, UserContent, ToolSchema, ToolCall, TrifectaMode, ToolCallEvent, ToolResultEvent, ToolStreamEvent, TurnEndEvent, ConfirmationProvider, PlanStep, ApprovalMode } from './types.js';
 import { OpenAIClient } from './client.js';
 import { enforceContextBudget, stripThinking, estimateTokensFromMessages, estimateToolSchemaTokens } from './history.js';
 import * as tools from './tools.js';
@@ -580,6 +580,7 @@ export type AgentHooks = {
   onToken?: (t: string) => void;
   onFirstDelta?: () => void;
   onToolCall?: (call: ToolCallEvent) => void;
+  onToolStream?: (ev: ToolStreamEvent) => void | Promise<void>;
   onToolResult?: (result: ToolResultEvent) => void | Promise<void>;
   onTurnEnd?: (stats: TurnEndEvent) => void | Promise<void>;
 };
@@ -1959,6 +1960,19 @@ export async function createSession(opts: {
       await hookManager.emit('tool_call', { askId, turn: turns, call });
     };
 
+    const emitToolStream = (stream: ToolStreamEvent): void => {
+      try {
+        void hookObj.onToolStream?.(stream);
+      } catch {
+        // best effort
+      }
+      try {
+        void hookManager.emit('tool_stream', { askId, turn: turns, stream });
+      } catch {
+        // best effort
+      }
+    };
+
     const emitToolResult = async (result: ToolResultEvent): Promise<void> => {
       await hookObj.onToolResult?.(result);
       await hookManager.emit('tool_result', { askId, turn: turns, result });
@@ -2826,7 +2840,13 @@ export async function createSession(opts: {
               if (isSpawnTask) {
                 content = await runSpawnTask(args);
               } else if (builtInFn) {
-                const value = await builtInFn(ctx as any, args);
+                const callCtx = {
+                  ...ctx,
+                  toolCallId: callId,
+                  toolName: name,
+                  onToolStream: emitToolStream,
+                };
+                const value = await builtInFn(callCtx as any, args);
                 content = typeof value === 'string' ? value : JSON.stringify(value);
                 if (name === 'exec') {
                   // Successful exec clears blocked-loop counters.
