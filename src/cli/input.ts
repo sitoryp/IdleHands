@@ -288,25 +288,52 @@ export function mimeForImagePath(value: string): string {
   return 'application/octet-stream';
 }
 
-export function extractImageRefs(text: string): string[] {
+export function extractImageRefs(text: string): Array<{ path: string; type: 'image' | 'image-info' }> {
   const refs = new Set<string>();
+  const results: Array<{ path: string; type: 'image' | 'image-info' }> = [];
+
+  // New syntax: @image:path and @image-info:path  
+  const atImageRe = /@image(-info)?:([^\s]+)/g;
+  let atM: RegExpExecArray | null;
+  while ((atM = atImageRe.exec(text)) !== null) {
+    const isInfoOnly = !!atM[1]; // -info suffix
+    const imagePath = atM[2].trim();
+    if (imagePath && !refs.has(imagePath)) {
+      refs.add(imagePath);
+      results.push({ 
+        path: imagePath, 
+        type: isInfoOnly ? 'image-info' : 'image' 
+      });
+    }
+  }
 
   // Markdown images: ![alt](path-or-url)
   const mdRe = /!\[[^\]]*\]\(([^)]+)\)/g;
   let mm: RegExpExecArray | null;
   while ((mm = mdRe.exec(text)) !== null) {
-    const v = mm[1].trim();
-    if (v) refs.add(v.replace(/^['"]|['"]$/g, ''));
+    const v = mm[1].trim().replace(/^['"]|['"]$/g, '');
+    if (v && !refs.has(v)) {
+      refs.add(v);
+      results.push({ path: v, type: 'image' });
+    }
   }
 
-  // Plain URLs and path-like image tokens
+  // Plain URLs and path-like image tokens (but exclude @image: patterns)
   const tokenRe = /https?:\/\/[^\s)]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)(?:\?[^\s)]*)?|(?:\.\.\/|\.\/|\/|~\/)?[^\s)]+\.(?:png|jpe?g|webp|gif|bmp|tiff?)/gi;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(text)) !== null) {
-    refs.add(m[0].trim());
+    const imagePath = m[0].trim();
+    // Skip if this looks like an @image: pattern (already processed)
+    if (imagePath.startsWith('@image') || imagePath.startsWith('![')) {
+      continue;
+    }
+    if (!refs.has(imagePath)) {
+      refs.add(imagePath);
+      results.push({ path: imagePath, type: 'image' });
+    }
   }
 
-  return [...refs];
+  return results;
 }
 
 export function hasClipboardImageToken(text: string): boolean {
@@ -333,14 +360,20 @@ function readClipboardImageDataUrl(): string | null {
 export async function expandPromptImages(
   text: string,
   cwd: string,
-  supportsVision: boolean
-): Promise<{ content: UserContent; warnings: string[]; imageCount: number }> {
-  const refs = extractImageRefs(text);
+  supportsVision: boolean,
+  extractMetadata?: boolean
+): Promise<{ 
+  content: UserContent; 
+  warnings: string[]; 
+  imageCount: number;
+  imageMetadata?: Array<{ path: string; metadata: Record<string, any> }>;
+}> {
+  const imageRefs = extractImageRefs(text);
   const wantsClipboard = hasClipboardImageToken(text);
-  if (!refs.length && !wantsClipboard) return { content: text, warnings: [], imageCount: 0 };
+  if (!imageRefs.length && !wantsClipboard) return { content: text, warnings: [], imageCount: 0 };
 
   if (!supportsVision) {
-    const detected = refs.length + (wantsClipboard ? 1 : 0);
+    const detected = imageRefs.length + (wantsClipboard ? 1 : 0);
     return {
       content: text,
       warnings: [`[vision] detected ${detected} image reference(s), but current model does not advertise vision input support.`],
@@ -350,12 +383,23 @@ export async function expandPromptImages(
 
   const warnings: string[] = [];
   const parts: Exclude<UserContent, string> = [{ type: 'text', text }];
+  const imageMetadata: Array<{ path: string; metadata: Record<string, any> }> = [];
   let imageCount = 0;
+  let updatedText = text;
 
-  for (const ref of refs) {
+  for (const { path: ref, type } of imageRefs) {
     if (/^https?:\/\//i.test(ref)) {
-      parts.push({ type: 'image_url', image_url: { url: ref } });
-      imageCount++;
+      if (type === 'image') {
+        parts.push({ type: 'image_url', image_url: { url: ref } });
+        imageCount++;
+      }
+      // For info-only URLs, just add metadata if extractMetadata is enabled
+      if (extractMetadata) {
+        imageMetadata.push({ 
+          path: ref, 
+          metadata: { type: 'url', format: 'unknown', note: 'URL image - metadata not available' }
+        });
+      }
       continue;
     }
 
@@ -375,6 +419,56 @@ export async function expandPromptImages(
       continue;
     }
 
+    // For @image-info: syntax, only extract metadata
+    if (type === 'image-info') {
+      if (extractMetadata) {
+        try {
+          // Use our read_image tool to extract metadata
+          const { read_image } = await import('../tools.js');
+          const toolCtx = {
+            cwd,
+            noConfirm: true,
+            dryRun: false,
+            mode: 'code' as const
+          };
+          
+          const result = await read_image(toolCtx, { path: cleaned });
+          if (result.startsWith('ERROR:')) {
+            warnings.push(`[vision] metadata extraction failed for ${cleaned}: ${result}`);
+            imageMetadata.push({ path: cleaned, metadata: { error: result } });
+          } else {
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success) {
+                const { format, width, height, size_bytes, mime_type } = parsed.result;
+                imageMetadata.push({ 
+                  path: cleaned, 
+                  metadata: { format, width, height, size_bytes, mime_type }
+                });
+                
+                // Replace @image-info:path with metadata text in the prompt
+                const metadataText = `[Image: ${format.toUpperCase()} ${width}x${height}, ${(size_bytes/1024/1024).toFixed(2)}MB]`;
+                const pattern = new RegExp(`@image-info:${escapeRegex(ref)}`, 'g');
+                updatedText = updatedText.replace(pattern, metadataText);
+              } else {
+                warnings.push(`[vision] metadata extraction failed for ${cleaned}`);
+              }
+            } catch {
+              warnings.push(`[vision] metadata parsing failed for ${cleaned}`);
+            }
+          }
+        } catch (e: any) {
+          warnings.push(`[vision] metadata extraction error for ${cleaned}: ${e?.message ?? e}`);
+        }
+      } else {
+        // Just remove the @image-info: token if metadata extraction is not enabled
+        const pattern = new RegExp(`@image-info:${escapeRegex(ref)}`, 'g');
+        updatedText = updatedText.replace(pattern, `[Image: ${cleaned}]`);
+      }
+      continue;
+    }
+
+    // Regular image processing for @image: and markdown/path references
     const buf = await fs.readFile(abs).catch(() => null);
     if (!buf) {
       warnings.push(`[vision] failed to read: ${cleaned}`);
@@ -383,8 +477,46 @@ export async function expandPromptImages(
 
     const mime = mimeForImagePath(abs);
     const b64 = buf.toString('base64');
+    
+    // Extract metadata if requested
+    if (extractMetadata) {
+      try {
+        const { read_image } = await import('../tools.js');
+        const toolCtx = {
+          cwd,
+          noConfirm: true,
+          dryRun: false,
+          mode: 'code' as const
+        };
+        
+        const result = await read_image(toolCtx, { path: cleaned });
+        if (!result.startsWith('ERROR:')) {
+          try {
+            const parsed = JSON.parse(result);
+            if (parsed.success) {
+              const { format, width, height, size_bytes, mime_type } = parsed.result;
+              imageMetadata.push({ 
+                path: cleaned, 
+                metadata: { format, width, height, size_bytes, mime_type }
+              });
+            }
+          } catch {
+            // Failed to parse, but we can still show the image
+          }
+        }
+      } catch {
+        // Failed to extract metadata, but we can still show the image
+      }
+    }
+
     parts.push({ type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } });
     imageCount++;
+
+    // Replace @image:path with markdown syntax in the text
+    const atImagePattern = new RegExp(`@image:${escapeRegex(ref)}`, 'g');
+    if (updatedText.includes(`@image:${ref}`)) {
+      updatedText = updatedText.replace(atImagePattern, `![Image](${ref})`);
+    }
   }
 
   if (wantsClipboard) {
@@ -397,9 +529,25 @@ export async function expandPromptImages(
     }
   }
 
-  if (imageCount === 0) {
-    return { content: text, warnings, imageCount: 0 };
+  // Update the text part with any replacements
+  if (parts.length > 0) {
+    parts[0] = { type: 'text', text: updatedText };
   }
 
-  return { content: parts, warnings, imageCount };
+  const result: {
+    content: UserContent; 
+    warnings: string[]; 
+    imageCount: number;
+    imageMetadata?: Array<{ path: string; metadata: Record<string, any> }>;
+  } = {
+    content: imageCount === 0 ? updatedText : parts,
+    warnings,
+    imageCount
+  };
+
+  if (extractMetadata && imageMetadata.length > 0) {
+    result.imageMetadata = imageMetadata;
+  }
+
+  return result;
 }
