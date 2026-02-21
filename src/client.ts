@@ -154,6 +154,10 @@ export class OpenAIClient {
 
   /** Default response timeout in ms (overridable per-call). */
   private defaultResponseTimeoutMs = 600_000;
+  /** Default connection/header timeout in ms for chat requests. */
+  private defaultConnectionTimeoutMs = 600_000;
+  /** True when connection timeout was explicitly set by caller/config. */
+  private explicitConnectionTimeout = false;
 
   /**
    * When true, tools/tool_choice are stripped from API requests.
@@ -241,6 +245,18 @@ export class OpenAIClient {
   setResponseTimeout(seconds: number): void {
     if (Number.isFinite(seconds) && seconds > 0) {
       this.defaultResponseTimeoutMs = seconds * 1000;
+      // Keep connection timeout aligned unless explicitly overridden.
+      if (!this.explicitConnectionTimeout) {
+        this.defaultConnectionTimeoutMs = this.defaultResponseTimeoutMs;
+      }
+    }
+  }
+
+  /** Set the default connection/header timeout (in seconds) for requests. */
+  setConnectionTimeout(seconds: number): void {
+    if (Number.isFinite(seconds) && seconds > 0) {
+      this.defaultConnectionTimeoutMs = seconds * 1000;
+      this.explicitConnectionTimeout = true;
     }
   }
 
@@ -424,10 +440,10 @@ export class OpenAIClient {
     return this.sanitizeRequest(body);
   }
 
-  /** Wrap fetch with a connection timeout derived from response_timeout (min 30s). */
+  /** Wrap fetch with a configurable connection/header timeout. */
   private async fetchWithConnTimeout(url: string, init: RequestInit, connTimeoutMs?: number): Promise<Response> {
-    // Connection timeout = min(response_timeout, 60s), floor 30s — enough to establish TCP but not wait forever.
-    if (!connTimeoutMs) connTimeoutMs = Math.max(30_000, Math.min(this.defaultResponseTimeoutMs, 60_000));
+    // Default follows response timeout (or explicit connection_timeout), with a small floor.
+    if (!connTimeoutMs) connTimeoutMs = Math.max(5_000, this.defaultConnectionTimeoutMs);
 
     const ac = new AbortController();
     const chainedAbort = init.signal;

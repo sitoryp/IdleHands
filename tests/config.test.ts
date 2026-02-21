@@ -17,6 +17,8 @@ describe('config resolution: CLI > env > file > defaults', () => {
     'IDLEHANDS_MAX_TOKENS',
     'IDLEHANDS_TEMPERATURE',
     'IDLEHANDS_TIMEOUT',
+    'IDLEHANDS_RESPONSE_TIMEOUT',
+    'IDLEHANDS_CONNECTION_TIMEOUT',
     'IDLEHANDS_NO_CONFIRM',
     'IDLEHANDS_VERBOSE',
     'IDLEHANDS_APPROVAL_MODE',
@@ -442,6 +444,16 @@ describe('config resolution: CLI > env > file > defaults', () => {
       delete process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS;
       delete process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS;
       delete process.env.IDLEHANDS_DEBUG_ABORT_REASON;
+    }
+  });
+
+  it('parses connection timeout from env', async () => {
+    process.env.IDLEHANDS_CONNECTION_TIMEOUT = '900';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.connection_timeout, 900);
+    } finally {
+      delete process.env.IDLEHANDS_CONNECTION_TIMEOUT;
     }
   });
 

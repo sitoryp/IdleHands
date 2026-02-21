@@ -18,7 +18,7 @@ idlehands setup
 - `model`: model ID (empty = auto/select first)
 - `dir`: working directory
 - `max_tokens`, `temperature`, `top_p`
-- `timeout`, `max_iterations`
+- `timeout`, `max_iterations`, `response_timeout`, `connection_timeout`
 - `approval_mode`: `plan/reject/default/auto-edit/yolo`
 - `mode`: `code` or `sys`
 - `context_window`, `context_max_tokens`

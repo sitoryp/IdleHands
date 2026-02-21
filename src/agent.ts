@@ -1252,6 +1252,9 @@ export async function createSession(opts: {
   if (typeof cfg.response_timeout === 'number' && cfg.response_timeout > 0) {
     client.setResponseTimeout(cfg.response_timeout);
   }
+  if (typeof (client as any).setConnectionTimeout === 'function' && typeof cfg.connection_timeout === 'number' && cfg.connection_timeout > 0) {
+    (client as any).setConnectionTimeout(cfg.connection_timeout);
+  }
 
   // Health check + model list (cheap, avoids wasting GPU on chat warmups if unreachable)
   let modelsList = normalizeModelsResponse(await client.models().catch(() => null));
@@ -2754,9 +2757,9 @@ export async function createSession(opts: {
         const onCallerAbort = () => ac.abort();
         callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
 
-        // Per-request timeout: the lesser of response_timeout (default 300s) or the remaining session wall time.
+        // Per-request timeout: the lesser of response_timeout (default 600s) or the remaining session wall time.
         // This prevents a single slow request from consuming the entire session budget.
-        const perReqCap = cfg.response_timeout && cfg.response_timeout > 0 ? cfg.response_timeout : 300;
+        const perReqCap = cfg.response_timeout && cfg.response_timeout > 0 ? cfg.response_timeout : 600;
         const wallRemaining = Math.max(0, cfg.timeout - (Date.now() - wallStart) / 1000);
         const reqTimeout = Math.min(perReqCap, Math.max(10, wallRemaining));
         const timer = setTimeout(() => ac.abort(), reqTimeout * 1000);
