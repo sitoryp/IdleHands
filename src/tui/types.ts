@@ -75,6 +75,12 @@ export interface SettingsMenuState {
   selectedIndex: number;
 }
 
+export interface HooksInspectorState {
+  mode: 'status' | 'errors' | 'slow' | 'plugins';
+  lines: string[];
+  offset: number;
+}
+
 export interface TuiState {
   mode: TuiMode;
   focus: PanelId;
@@ -98,6 +104,7 @@ export interface TuiState {
   branchPicker?: BranchPickerState;
   stepNavigator?: StepNavigatorState;
   settingsMenu?: SettingsMenuState;
+  hooksInspector?: HooksInspectorState;
   scroll: Record<PanelId, number>;
 }
 

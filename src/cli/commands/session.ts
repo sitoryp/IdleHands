@@ -30,7 +30,7 @@ export const sessionCommands: SlashCommand[] = [
     async execute(ctx) {
       console.log(
         ctx.S.dim('Commands: ') +
-          '/help /quit /edit [seed text] /about /mode [code|sys] /status /watchdog [status] /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
+          '/help /quit /edit [seed text] /about /mode [code|sys] /status /watchdog [status] /hooks [status|errors|slow|plugins] /stats /server /perf /offline [on|off|status] /system [edit|reset|tokens] /lsp [status] /mcp [desc|restart <name>|enable <tool>|disable <tool>] /statusbar on|off /approval [mode] /plan /step [on|off] /approve [N] /reject /history /new /compact [topic|hard|dry] /init /git [/diff] /branch [name] /changes [--stat|--full|--since N|reset|<file>] /watch [off|status|<path...> [--max N]] /sessions /conv branch|branches|checkout|merge ... /cost /model <name> /escalate [next|N|model] /deescalate /capture on|off|last /index [run|status|stats|clear] /undo [path] /save <path> /load <path> /vault <query> /notes /note <key> <value> /checkpoints /rewind <id> /diff <id> /subagents [on|off] /theme [name|list] /vim /commands /exit-shell' +
           '\n' + ctx.S.dim('Shell: !<cmd> run once, !!<cmd> run + inject output, ! toggles shell mode') +
           '\n' + ctx.S.dim('Templates: /fix /review /test /explain /refactor, plus custom markdown commands in ~/.config/idlehands/commands/')
       );
@@ -87,6 +87,69 @@ export const sessionCommands: SlashCommand[] = [
         lines.push(`Recommended tuning: ${WATCHDOG_RECOMMENDED_TUNING_TEXT}`);
       }
 
+      console.log(lines.join('\n'));
+      return true;
+    },
+  },
+  {
+    name: '/hooks',
+    description: 'Inspect loaded hooks/plugins and runtime stats',
+    async execute(ctx, args) {
+      const mode = args.trim().toLowerCase();
+      const manager = ctx.session?.hookManager;
+      if (!manager || typeof manager.getSnapshot !== 'function') {
+        console.log('Hooks: unavailable for this session.');
+        return true;
+      }
+
+      const snap = manager.getSnapshot();
+      const totalEvents = Object.values(snap.eventCounts).reduce((a: number, b: any) => a + Number(b || 0), 0);
+
+      if (mode === 'errors') {
+        console.log('Hook Errors (recent):');
+        if (!snap.recentErrors.length) console.log('  none');
+        else for (const e of snap.recentErrors) console.log(`  - ${e}`);
+        return true;
+      }
+
+      if (mode === 'slow') {
+        console.log('Slow Hook Handlers (recent):');
+        if (!snap.recentSlowHandlers.length) console.log('  none');
+        else for (const e of snap.recentSlowHandlers) console.log(`  - ${e}`);
+        return true;
+      }
+
+      if (mode === 'plugins') {
+        console.log('Hook Plugins:');
+        if (!snap.plugins.length) console.log('  none');
+        else {
+          for (const p of snap.plugins) {
+            console.log(`  - ${p.name} (${p.source})`);
+            console.log(`      granted: ${p.grantedCapabilities.join(', ') || 'none'}`);
+            if (p.deniedCapabilities.length) {
+              console.log(`      denied:  ${p.deniedCapabilities.join(', ')}`);
+            }
+          }
+        }
+        return true;
+      }
+
+      if (mode && mode !== 'status') {
+        console.log('Usage: /hooks [status|errors|slow|plugins]');
+        return true;
+      }
+
+      const lines = [
+        'Hooks Status',
+        `Enabled: ${snap.enabled ? 'yes' : 'no'}`,
+        `Strict mode: ${snap.strict ? 'yes' : 'no'}`,
+        `Allowed capabilities: ${snap.allowedCapabilities.join(', ')}`,
+        `Plugins: ${snap.plugins.length}`,
+        `Handlers: ${snap.handlers.length}`,
+        `Events observed: ${totalEvents}`,
+        `Recent errors: ${snap.recentErrors.length}`,
+        `Recent slow handlers: ${snap.recentSlowHandlers.length}`,
+      ];
       console.log(lines.join('\n'));
       return true;
     },

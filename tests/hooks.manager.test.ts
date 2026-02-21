@@ -75,4 +75,51 @@ describe('hooks manager', () => {
       /handler failed/i,
     );
   });
+
+  it('redacts gated payload fields when capabilities are not allowed', async () => {
+    const captured: any[] = [];
+    const manager = new HookManager({
+      strict: false,
+      logger: () => {},
+      allowedCapabilities: ['observe'],
+      context: () => ({
+        sessionId: 's1',
+        cwd: '/tmp',
+        model: 'm1',
+        harness: 'h1',
+        endpoint: 'http://localhost:8080/v1',
+      }),
+    });
+
+    await manager.registerPlugin({
+      name: 'caps-test',
+      capabilities: ['observe', 'read_prompts', 'read_tool_args', 'read_tool_results'],
+      hooks: {
+        ask_start: (payload) => captured.push(payload),
+        tool_call: (payload) => captured.push(payload),
+        tool_result: (payload) => captured.push(payload),
+      },
+    }, 'caps-test');
+
+    await manager.emit('ask_start', { askId: 'a1', instruction: 'secret prompt' });
+    await manager.emit('tool_call', {
+      askId: 'a1',
+      turn: 1,
+      call: { id: 'c1', name: 'exec', args: { command: 'echo secret' } },
+    });
+    await manager.emit('tool_result', {
+      askId: 'a1',
+      turn: 1,
+      result: { id: 'c1', name: 'exec', success: true, summary: 'ok', result: 'very secret result' },
+    });
+
+    assert.equal(captured[0]?.instruction, '[redacted: missing read_prompts capability]');
+    assert.deepEqual(captured[1]?.call?.args, {});
+    assert.equal(captured[2]?.result?.result, '[redacted: missing read_tool_results capability]');
+
+    const snapshot = manager.getSnapshot();
+    assert.equal(snapshot.plugins.length, 1);
+    assert.equal(snapshot.plugins[0]?.deniedCapabilities.includes('read_prompts'), true);
+    assert.equal(snapshot.eventCounts.ask_start, 1);
+  });
 });

@@ -191,3 +191,23 @@ test("settings menu open/update/close lifecycle", () => {
   s = reduceTuiState(s, { type: "SETTINGS_CLOSE" });
   assert.equal(s.settingsMenu, undefined);
 });
+
+test("hooks inspector open/move/close lifecycle", () => {
+  let s = createInitialTuiState();
+  s = reduceTuiState(s, {
+    type: "HOOKS_INSPECTOR_OPEN",
+    mode: "status",
+    lines: ["line 1", "line 2", "line 3"],
+  });
+  assert.ok(s.hooksInspector);
+  assert.equal(s.hooksInspector?.offset, 0);
+
+  s = reduceTuiState(s, { type: "HOOKS_INSPECTOR_MOVE", delta: 2 });
+  assert.equal(s.hooksInspector?.offset, 2);
+
+  s = reduceTuiState(s, { type: "HOOKS_INSPECTOR_MOVE", delta: -99 });
+  assert.equal(s.hooksInspector?.offset, 0);
+
+  s = reduceTuiState(s, { type: "HOOKS_INSPECTOR_CLOSE" });
+  assert.equal(s.hooksInspector, undefined);
+});

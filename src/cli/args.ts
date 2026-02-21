@@ -195,6 +195,8 @@ Options:
   --timeout N
   --response-timeout N       (seconds to wait for model responses; default 600)
   --connection-timeout N     (seconds to wait for initial HTTP connection/headers; default follows response-timeout)
+  --initial-connection-check [true|false]  (run fast probe before first ask; default true)
+  --initial-connection-timeout N           (seconds for first probe timeout; default 10)
   --max-iterations N
   --sys                      (start in sys mode)
   --sys-eager                (inject system snapshot into first message)

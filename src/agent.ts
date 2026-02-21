@@ -1255,6 +1255,12 @@ export async function createSession(opts: {
   if (typeof (client as any).setConnectionTimeout === 'function' && typeof cfg.connection_timeout === 'number' && cfg.connection_timeout > 0) {
     (client as any).setConnectionTimeout(cfg.connection_timeout);
   }
+  if (typeof (client as any).setInitialConnectionCheck === 'function' && typeof cfg.initial_connection_check === 'boolean') {
+    (client as any).setInitialConnectionCheck(cfg.initial_connection_check);
+  }
+  if (typeof (client as any).setInitialConnectionProbeTimeout === 'function' && typeof cfg.initial_connection_timeout === 'number' && cfg.initial_connection_timeout > 0) {
+    (client as any).setInitialConnectionProbeTimeout(cfg.initial_connection_timeout);
+  }
 
   // Health check + model list (cheap, avoids wasting GPU on chat warmups if unreachable)
   let modelsList = normalizeModelsResponse(await client.models().catch(() => null));
@@ -1281,6 +1287,7 @@ export async function createSession(opts: {
     enabled: hookCfg.enabled !== false,
     strict: hookCfg.strict === true,
     warnMs: hookCfg.warn_ms,
+    allowedCapabilities: Array.isArray(hookCfg.allow_capabilities) ? hookCfg.allow_capabilities as any : undefined,
     context: () => ({
       sessionId,
       cwd: cfg.dir ?? process.cwd(),
@@ -1616,6 +1623,7 @@ export async function createSession(opts: {
     ];
     sessionMetaPending = sessionMeta;
     lastEditedPath = undefined;
+    initialConnectionProbeDone = false;
     mcpToolsLoaded = !mcpLazySchemaMode;
   };
 
@@ -1640,6 +1648,7 @@ export async function createSession(opts: {
 
   let reqCounter = 0;
   let inFlight: AbortController | null = null;
+  let initialConnectionProbeDone = false;
   let lastEditedPath: string | undefined;
 
   // Plan mode state (Phase 8)
@@ -2506,6 +2515,13 @@ export async function createSession(opts: {
     const reviewKeys = reviewArtifactKeys(projectDir);
     const retrievalRequested = looksLikeReviewRetrievalRequest(rawInstructionText);
     const shouldPersistReviewArtifact = looksLikeCodeReviewRequest(rawInstructionText) && !retrievalRequested;
+
+    if (!retrievalRequested && cfg.initial_connection_check !== false && !initialConnectionProbeDone) {
+      if (typeof (client as any).probeConnection === 'function') {
+        await (client as any).probeConnection();
+        initialConnectionProbeDone = true;
+      }
+    }
 
     if (retrievalRequested) {
       const latest = vault

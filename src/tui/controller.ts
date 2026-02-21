@@ -64,7 +64,7 @@ export class TuiController {
       this.tabIndex = -1;
       const names = allCommandNames();
       // Add TUI-specific commands that aren't in the registry
-      const extra = ['/quit', '/exit', '/clear', '/help', '/branches', '/steps', '/settings'];
+      const extra = ['/quit', '/exit', '/clear', '/help', '/branches', '/steps', '/settings', '/hooks'];
       const all = [...new Set([...names, ...extra])];
       this.tabCandidates = all.filter(n => n.toLowerCase().startsWith(prefix)).sort();
     }
@@ -280,6 +280,58 @@ export class TuiController {
     this.refreshSettingsMenu(menu.selectedIndex);
   }
 
+  private buildHookInspectorLines(mode: 'status' | 'errors' | 'slow' | 'plugins'): string[] {
+    const manager: any = this.session?.hookManager;
+    if (!manager || typeof manager.getSnapshot !== 'function') {
+      return ['Hooks are unavailable for this session.'];
+    }
+
+    const snap = manager.getSnapshot();
+    const totalEvents = Object.values(snap.eventCounts || {}).reduce((sum: number, n: any) => sum + Number(n || 0), 0);
+
+    if (mode === 'errors') {
+      return snap.recentErrors?.length
+        ? snap.recentErrors.map((x: string) => `• ${x}`)
+        : ['No recent hook errors.'];
+    }
+
+    if (mode === 'slow') {
+      return snap.recentSlowHandlers?.length
+        ? snap.recentSlowHandlers.map((x: string) => `• ${x}`)
+        : ['No recent slow hook handlers.'];
+    }
+
+    if (mode === 'plugins') {
+      if (!snap.plugins?.length) return ['No hook plugins loaded.'];
+      const lines: string[] = [];
+      for (const p of snap.plugins) {
+        lines.push(`• ${p.name} (${p.source})`);
+        lines.push(`  granted: ${p.grantedCapabilities.join(', ') || 'none'}`);
+        if (p.deniedCapabilities?.length) lines.push(`  denied: ${p.deniedCapabilities.join(', ')}`);
+      }
+      return lines;
+    }
+
+    return [
+      `Enabled: ${snap.enabled ? 'yes' : 'no'}`,
+      `Strict mode: ${snap.strict ? 'yes' : 'no'}`,
+      `Allowed capabilities: ${(snap.allowedCapabilities || []).join(', ')}`,
+      `Plugins: ${snap.plugins?.length ?? 0}`,
+      `Handlers: ${snap.handlers?.length ?? 0}`,
+      `Events observed: ${totalEvents}`,
+      `Recent errors: ${snap.recentErrors?.length ?? 0}`,
+      `Recent slow handlers: ${snap.recentSlowHandlers?.length ?? 0}`,
+    ];
+  }
+
+  private openHooksInspector(mode: 'status' | 'errors' | 'slow' | 'plugins' = 'status'): void {
+    this.dispatch({
+      type: 'HOOKS_INSPECTOR_OPEN',
+      mode,
+      lines: this.buildHookInspectorLines(mode),
+    });
+  }
+
   /** Push a system-role transcript item and re-render. */
   private pushSystemMessage(text: string): void {
     const item: TranscriptItem = { id: `sys_${Date.now()}`, role: "system", text, ts: Date.now() };
@@ -325,7 +377,7 @@ export class TuiController {
       this.pushSystemMessage(
         `Commands: ${cmds}\n` +
         `Shell: !<cmd> to run, !! to inject output\n` +
-        `TUI: /branches [browse|checkout|merge], /steps, /settings\n` +
+        `TUI: /branches [browse|checkout|merge], /steps, /settings, /hooks [status|errors|slow|plugins]\n` +
         `Hotkeys: Ctrl+G step navigator, Ctrl+O quick settings`
       );
       return true;
@@ -344,6 +396,16 @@ export class TuiController {
     }
     if (head === '/settings') {
       this.openSettingsMenu();
+      return true;
+    }
+    if (head === '/hooks') {
+      const modeRaw = line.replace(/^\/hooks\s*/i, '').trim().toLowerCase();
+      const mode = (modeRaw || 'status') as 'status' | 'errors' | 'slow' | 'plugins';
+      if (!['status', 'errors', 'slow', 'plugins'].includes(mode)) {
+        this.dispatch({ type: 'ALERT_PUSH', id: `hooks_${Date.now()}`, level: 'warn', text: 'Usage: /hooks [status|errors|slow|plugins]' });
+        return true;
+      }
+      this.openHooksInspector(mode);
       return true;
     }
 
@@ -539,7 +601,7 @@ export class TuiController {
       type: "ALERT_PUSH",
       id: `info_${Date.now()}`,
       level: "info",
-      text: "Input: Enter=send, Ctrl+J/Alt+Enter=newline, Up/Down=history, Ctrl+G=steps, Ctrl+O=settings.",
+      text: "Input: Enter=send, Ctrl+J/Alt+Enter=newline, Up/Down=history, Ctrl+G=steps, Ctrl+O=settings, /hooks inspector.",
     });
 
     const onSigwinch = () => {
@@ -608,6 +670,14 @@ export class TuiController {
           if (sAction === 'cursor_left') { this.adjustSelectedSetting(-1); continue; }
           if (sAction === 'cursor_right' || sAction === 'send') { this.adjustSelectedSetting(1); continue; }
           if (sAction === 'cancel' || sAction === 'quit' || key === 'text:q') { this.dispatch({ type: 'SETTINGS_CLOSE' }); continue; }
+          continue;
+        }
+
+        if (this.state.hooksInspector) {
+          const hAction = resolveAction(key);
+          if (hAction === 'history_prev' || hAction === 'scroll_up') { this.dispatch({ type: 'HOOKS_INSPECTOR_MOVE', delta: -1 }); continue; }
+          if (hAction === 'history_next' || hAction === 'scroll_down') { this.dispatch({ type: 'HOOKS_INSPECTOR_MOVE', delta: 1 }); continue; }
+          if (hAction === 'cancel' || hAction === 'quit' || key === 'text:q' || hAction === 'send') { this.dispatch({ type: 'HOOKS_INSPECTOR_CLOSE' }); continue; }
           continue;
         }
 
