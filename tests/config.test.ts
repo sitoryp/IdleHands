@@ -40,7 +40,11 @@ describe('config resolution: CLI > env > file > defaults', () => {
     'IDLEHANDS_WATCHDOG_MAX_COMPACTIONS',
     'IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS',
     'IDLEHANDS_DEBUG_ABORT_REASON',
-    'IDLEHANDS_DEBUG_CANCEL_REASON'
+    'IDLEHANDS_DEBUG_CANCEL_REASON',
+    'IDLEHANDS_HOOKS_ENABLED',
+    'IDLEHANDS_HOOKS_STRICT',
+    'IDLEHANDS_HOOK_PLUGIN_PATHS',
+    'IDLEHANDS_HOOK_WARN_MS'
   ];
 
   before(async () => {
@@ -438,6 +442,29 @@ describe('config resolution: CLI > env > file > defaults', () => {
       delete process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS;
       delete process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS;
       delete process.env.IDLEHANDS_DEBUG_ABORT_REASON;
+    }
+  });
+
+  it('parses hook system settings from env', async () => {
+    process.env.IDLEHANDS_HOOKS_ENABLED = '1';
+    process.env.IDLEHANDS_HOOKS_STRICT = '1';
+    process.env.IDLEHANDS_HOOK_PLUGIN_PATHS = './dist/hooks/plugins/example-console.js, ./plugins/custom.js';
+    process.env.IDLEHANDS_HOOK_WARN_MS = '500';
+
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.hooks?.enabled, true);
+      assert.equal(config.hooks?.strict, true);
+      assert.deepEqual(config.hooks?.plugin_paths, [
+        './dist/hooks/plugins/example-console.js',
+        './plugins/custom.js',
+      ]);
+      assert.equal(config.hooks?.warn_ms, 500);
+    } finally {
+      delete process.env.IDLEHANDS_HOOKS_ENABLED;
+      delete process.env.IDLEHANDS_HOOKS_STRICT;
+      delete process.env.IDLEHANDS_HOOK_PLUGIN_PATHS;
+      delete process.env.IDLEHANDS_HOOK_WARN_MS;
     }
   });
 
