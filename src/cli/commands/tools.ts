@@ -1,5 +1,5 @@
 /**
- * Tool commands: /lsp, /mcp, /commands.
+ * Tool commands: /image, /lsp, /mcp, /commands.
  */
 
 import type { SlashCommand } from '../command-registry.js';
@@ -8,6 +8,155 @@ import { projectDir } from '../../utils.js';
 import { restTokens } from '../command-utils.js';
 
 export const toolCommands: SlashCommand[] = [
+  {
+    name: '/image',
+    description: 'Image analysis tools',
+    async execute(ctx, args) {
+      const parts = args.split(/\s+/).filter(Boolean);
+      const sub = (parts[0] || '').toLowerCase();
+
+      if (!sub || sub === 'help') {
+        console.log(ctx.S.bold('Image analysis commands:'));
+        console.log('  /image read <path>     - Read and analyze an image file');
+        console.log('  /image base64 <data>   - Analyze base64-encoded image data');
+        console.log('  /image info <path>     - Show only metadata for an image');
+        return true;
+      }
+
+      if (sub === 'read') {
+        const imagePath = parts.slice(1).join(' ').trim();
+        if (!imagePath) {
+          console.log('Usage: /image read <path>');
+          return true;
+        }
+
+        try {
+          // Import the tool dynamically to avoid circular imports
+          const { read_image } = await import('../../tools.js');
+          const toolCtx = {
+            cwd: ctx.config.dir ?? process.cwd(),
+            noConfirm: ctx.config.no_confirm,
+            dryRun: ctx.config.dry_run,
+            mode: ctx.config.mode || 'code'
+          };
+          
+          const result = await read_image(toolCtx, { path: imagePath });
+          
+          if (result.startsWith('ERROR:')) {
+            console.log(ctx.S.red(result));
+          } else {
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success) {
+                const { format, width, height, size_bytes, mime_type } = parsed.result;
+                const sizeMB = (size_bytes / 1024 / 1024).toFixed(2);
+                console.log(ctx.S.bold(`Image: ${imagePath}`));
+                console.log(`Format: ${format.toUpperCase()}`);
+                console.log(`Dimensions: ${width}x${height}`);
+                console.log(`Size: ${sizeMB}MB (${size_bytes} bytes)`);
+                console.log(`MIME: ${mime_type}`);
+                console.log(ctx.S.dim('Base64 data available for vision models'));
+              } else {
+                console.log(ctx.S.red(result));
+              }
+            } catch {
+              console.log(result);
+            }
+          }
+        } catch (e: any) {
+          console.log(ctx.S.red(`Error: ${e?.message ?? e}`));
+        }
+        return true;
+      }
+
+      if (sub === 'info') {
+        const imagePath = parts.slice(1).join(' ').trim();
+        if (!imagePath) {
+          console.log('Usage: /image info <path>');
+          return true;
+        }
+
+        try {
+          const { read_image } = await import('../../tools.js');
+          const toolCtx = {
+            cwd: ctx.config.dir ?? process.cwd(),
+            noConfirm: ctx.config.no_confirm,
+            dryRun: ctx.config.dry_run,
+            mode: ctx.config.mode || 'code'
+          };
+          
+          const result = await read_image(toolCtx, { path: imagePath });
+          
+          if (result.startsWith('ERROR:')) {
+            console.log(ctx.S.red(result));
+          } else {
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success) {
+                const { format, width, height, size_bytes, mime_type } = parsed.result;
+                const sizeMB = (size_bytes / 1024 / 1024).toFixed(2);
+                console.log(`${format.toUpperCase()} ${width}x${height} ${sizeMB}MB ${mime_type}`);
+              } else {
+                console.log(ctx.S.red(result));
+              }
+            } catch {
+              console.log(result);
+            }
+          }
+        } catch (e: any) {
+          console.log(ctx.S.red(`Error: ${e?.message ?? e}`));
+        }
+        return true;
+      }
+
+      if (sub === 'base64') {
+        const base64Data = parts.slice(1).join(' ').trim();
+        if (!base64Data) {
+          console.log('Usage: /image base64 <base64-data>');
+          return true;
+        }
+
+        try {
+          const { read_image } = await import('../../tools.js');
+          const toolCtx = {
+            cwd: ctx.config.dir ?? process.cwd(),
+            noConfirm: ctx.config.no_confirm,
+            dryRun: ctx.config.dry_run,
+            mode: ctx.config.mode || 'code'
+          };
+          
+          const result = await read_image(toolCtx, { data: base64Data });
+          
+          if (result.startsWith('ERROR:')) {
+            console.log(ctx.S.red(result));
+          } else {
+            try {
+              const parsed = JSON.parse(result);
+              if (parsed.success) {
+                const { format, width, height, size_bytes, mime_type } = parsed.result;
+                const sizeMB = (size_bytes / 1024 / 1024).toFixed(2);
+                console.log(ctx.S.bold('Base64 Image Analysis:'));
+                console.log(`Format: ${format.toUpperCase()}`);
+                console.log(`Dimensions: ${width}x${height}`);
+                console.log(`Size: ${sizeMB}MB (${size_bytes} bytes)`);
+                console.log(`MIME: ${mime_type}`);
+              } else {
+                console.log(ctx.S.red(result));
+              }
+            } catch {
+              console.log(result);
+            }
+          }
+        } catch (e: any) {
+          console.log(ctx.S.red(`Error: ${e?.message ?? e}`));
+        }
+        return true;
+      }
+
+      console.log('Usage: /image [read <path>|base64 <data>|info <path>|help]');
+      return true;
+    },
+  },
   {
     name: '/lsp',
     description: 'LSP server status',
