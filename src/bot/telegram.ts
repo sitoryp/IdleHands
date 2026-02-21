@@ -10,7 +10,7 @@ import { SessionManager, type ManagedSession } from './session-manager.js';
 import { markdownToTelegramHtml, splitMessage, escapeHtml, formatToolCallSummary } from './format.js';
 import {
   handleStart, handleHelp, handleNew, handleCancel,
-  handleStatus, handleDir, handleModel, handleCompact,
+  handleStatus, handleWatchdog, handleDir, handleModel, handleCompact,
   handleApproval, handleMode, handleSubAgents, handleChanges, handleUndo, handleVault,
   handleAnton, handleAgent, handleAgents, handleEscalate, handleDeescalate,
 } from './commands.js';
@@ -392,6 +392,10 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   );
   const editIntervalMs = botConfig.edit_interval_ms ?? 1500;
   const replyToUserMessages = botConfig.reply_to_user_messages === true;
+  const watchdogMs = Math.max(30_000, Math.floor(botConfig.watchdog_timeout_ms ?? config.watchdog_timeout_ms ?? 120_000));
+  const maxWatchdogCompacts = Math.max(0, Math.floor(botConfig.watchdog_max_compactions ?? config.watchdog_max_compactions ?? 3));
+  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(botConfig.watchdog_idle_grace_timeouts ?? config.watchdog_idle_grace_timeouts ?? 1));
+  const debugAbortReason = (botConfig.debug_abort_reason ?? config.debug_abort_reason) === true;
 
   // Override default_dir from env
   if (process.env.IDLEHANDS_TG_DIR) {
@@ -406,6 +410,12 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
       endpoint: config.endpoint,
       defaultDir: botConfig.default_dir || config.dir,
       telegram: botConfig,
+      watchdog: {
+        timeoutMs: watchdogMs,
+        maxCompactions: maxWatchdogCompacts,
+        idleGraceTimeouts: watchdogIdleGraceTimeouts,
+        debugAbortReason,
+      },
     },
   });
 
@@ -441,6 +451,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   bot.command('new', (ctx) => handleNew(cmdCtx(ctx)));
   bot.command('cancel', (ctx) => handleCancel(cmdCtx(ctx)));
   bot.command('status', (ctx) => handleStatus(cmdCtx(ctx)));
+  bot.command('watchdog', (ctx) => handleWatchdog(cmdCtx(ctx)));
   bot.command('dir', (ctx) => handleDir(cmdCtx(ctx)));
   bot.command('model', (ctx) => handleModel(cmdCtx(ctx)));
   bot.command('compact', (ctx) => handleCompact(cmdCtx(ctx)));
@@ -663,6 +674,12 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
       fileThreshold,
       replyToUserMessages ? ctx.message.message_id : undefined,
       config,
+      {
+        timeoutMs: watchdogMs,
+        maxCompactions: maxWatchdogCompacts,
+        idleGraceTimeouts: watchdogIdleGraceTimeouts,
+        debugAbortReason,
+      },
     );
   });
 
@@ -707,6 +724,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
     { command: 'new', description: 'Start a new session' },
     { command: 'cancel', description: 'Abort current generation' },
     { command: 'status', description: 'Session stats' },
+    { command: 'watchdog', description: 'Show watchdog settings/status' },
     { command: 'agent', description: 'Show current agent info' },
     { command: 'agents', description: 'List all configured agents' },
     { command: 'escalate', description: 'Use larger model for next message' },
@@ -794,6 +812,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   console.error(`[bot] Model: ${config.model || 'auto'} | Endpoint: ${config.endpoint}`);
   console.error(`[bot] Allowed users: [${[...allowedUsers].join(', ')}]`);
   console.error(`[bot] Default dir: ${botConfig.default_dir || config.dir || '~'}`);
+  console.error(`[bot] Watchdog: timeout=${watchdogMs}ms compactions=${maxWatchdogCompacts} grace=${watchdogIdleGraceTimeouts}`);
   
   // Log multi-agent config
   const agents = botConfig.agents;
@@ -848,6 +867,12 @@ async function processMessage(
   fileThresholdChars: number,
   replyToId?: number,
   baseConfig?: IdlehandsConfig,
+  watchdogOptions?: {
+    timeoutMs?: number;
+    maxCompactions?: number;
+    idleGraceTimeouts?: number;
+    debugAbortReason?: boolean;
+  },
 ): Promise<void> {
   let turn = sessions.beginTurn(managed.chatId);
   if (!turn) return;
@@ -943,28 +968,47 @@ async function processMessage(
     onToken: (t) => {
       if (!sessions.isTurnActive(managed.chatId, turnId)) return;
       sessions.markProgress(managed.chatId, turnId);
+      watchdogGraceUsed = 0;
       streaming.onToken(t);
     },
     onToolCall: (call) => {
       if (!sessions.isTurnActive(managed.chatId, turnId)) return;
       sessions.markProgress(managed.chatId, turnId);
+      watchdogGraceUsed = 0;
       streaming.onToolCall(call);
     },
     onToolResult: (result) => {
       if (!sessions.isTurnActive(managed.chatId, turnId)) return;
       sessions.markProgress(managed.chatId, turnId);
+      watchdogGraceUsed = 0;
       streaming.onToolResult(result);
+    },
+    onTurnEnd: () => {
+      if (!sessions.isTurnActive(managed.chatId, turnId)) return;
+      sessions.markProgress(managed.chatId, turnId);
+      watchdogGraceUsed = 0;
     },
   };
 
-  const watchdogMs = 120_000;
-  const maxWatchdogCompacts = 3;
+  const watchdogMs = Math.max(30_000, Math.floor(watchdogOptions?.timeoutMs ?? baseConfig?.watchdog_timeout_ms ?? 120_000));
+  const maxWatchdogCompacts = Math.max(0, Math.floor(watchdogOptions?.maxCompactions ?? baseConfig?.watchdog_max_compactions ?? 3));
+  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(watchdogOptions?.idleGraceTimeouts ?? baseConfig?.watchdog_idle_grace_timeouts ?? 1));
+  const debugAbortReason = watchdogOptions?.debugAbortReason === true || baseConfig?.debug_abort_reason === true;
   let watchdogCompactPending = false;
+  let watchdogGraceUsed = 0;
+  let watchdogForcedCancel = false;
   const watchdog = setInterval(() => {
     const current = sessions.get(managed.chatId);
     if (!current || current.activeTurnId !== turnId || !current.inFlight) return;
     if (watchdogCompactPending) return;
     if (Date.now() - current.lastProgressAt > watchdogMs) {
+      if (watchdogGraceUsed < watchdogIdleGraceTimeouts) {
+        watchdogGraceUsed += 1;
+        current.lastProgressAt = Date.now();
+        console.error(`[bot:telegram] ${managed.chatId} watchdog inactivity on turn ${turnId} — applying grace period (${watchdogGraceUsed}/${watchdogIdleGraceTimeouts})`);
+        return;
+      }
+
       if (current.watchdogCompactAttempts < maxWatchdogCompacts) {
         current.watchdogCompactAttempts++;
         watchdogCompactPending = true;
@@ -980,6 +1024,7 @@ async function processMessage(
         });
       } else {
         console.error(`[bot:telegram] ${managed.chatId} watchdog timeout on turn ${turnId} — max compaction attempts reached, cancelling`);
+        watchdogForcedCancel = true;
         sessions.cancelActive(managed.chatId);
       }
     }
@@ -1042,7 +1087,22 @@ async function processMessage(
             // Re-process the original message with the escalated model
             const refreshed = sessions.get(managed.chatId);
             if (refreshed) {
-              await processMessage(bot, sessions, refreshed, text, editIntervalMs, fileThresholdChars, undefined, baseConfig);
+              await processMessage(
+                bot,
+                sessions,
+                refreshed,
+                text,
+                editIntervalMs,
+                fileThresholdChars,
+                undefined,
+                baseConfig,
+                {
+                  timeoutMs: watchdogMs,
+                  maxCompactions: maxWatchdogCompacts,
+                  idleGraceTimeouts: watchdogIdleGraceTimeouts,
+                  debugAbortReason,
+                },
+              );
             }
             return;
           }
@@ -1067,7 +1127,17 @@ async function processMessage(
         console.error(`[bot] ${managed.chatId} ask() error: ${msg}`);
 
         if (isAbort) {
-          if (sessions.isTurnActive(managed.chatId, turnId)) await streaming.finalizeError('Aborted.');
+          if (sessions.isTurnActive(managed.chatId, turnId)) {
+            const reason = String(msg).slice(0, 400);
+            if (watchdogForcedCancel) {
+              const base = `Cancelled by watchdog timeout after ${maxWatchdogCompacts} compaction attempts. Try a smaller scope, a faster model, or increase watchdog timeout/compaction settings.`;
+              const detail = debugAbortReason ? `${base}\n\n[debug] ${reason}` : base;
+              await streaming.finalizeError(detail);
+            } else {
+              const detail = debugAbortReason ? `Cancelled.\n\n[debug] ${reason}` : 'Cancelled.';
+              await streaming.finalizeError(detail);
+            }
+          }
         } else if (msg.includes('ECONNREFUSED') || msg.includes('Connection timeout') || msg.includes('503') || msg.includes('model loading')) {
           const endpoint = (managed.session as any)?.endpoint || '';
           const recovered = endpoint ? await waitForModelEndpoint(endpoint, 60_000, 2_500) : false;
@@ -1113,7 +1183,22 @@ async function processMessage(
       setTimeout(() => {
         const fresh = sessions.get(managed.chatId);
         if (!fresh) return;
-        void processMessage(bot, sessions, fresh, next, editIntervalMs, fileThresholdChars, undefined, baseConfig);
+        void processMessage(
+          bot,
+          sessions,
+          fresh,
+          next,
+          editIntervalMs,
+          fileThresholdChars,
+          undefined,
+          baseConfig,
+          {
+            timeoutMs: watchdogMs,
+            maxCompactions: maxWatchdogCompacts,
+            idleGraceTimeouts: watchdogIdleGraceTimeouts,
+            debugAbortReason,
+          },
+        );
       }, 500);
     }
   }

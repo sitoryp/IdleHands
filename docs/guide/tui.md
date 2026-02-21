@@ -40,10 +40,25 @@ Piped/CI environments use classic CLI mode automatically.
 
 ## Productivity tips
 
-- Use `/status`, `/server`, `/perf` to keep runtime health visible.
+- Use `/status`, `/watchdog`, `/server`, `/perf` to keep runtime health visible.
 - Use `/approval` to switch safety posture without restarting.
 - Use `/compact` in long sessions to keep context efficient.
 - Use `/new` when changing tasks/projects to avoid context bleed.
+
+## Watchdog tuning
+
+TUI uses the same top-level watchdog settings as bots:
+
+```json
+{
+  "watchdog_timeout_ms": 180000,
+  "watchdog_max_compactions": 4,
+  "watchdog_idle_grace_timeouts": 2,
+  "debug_abort_reason": true
+}
+```
+
+If `debug_abort_reason` is true, watchdog/manual abort alerts include raw abort details (`[debug] ...`) instead of only `Cancelled.`.
 
 ## Keyboard basics
 

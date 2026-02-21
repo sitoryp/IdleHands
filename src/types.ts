@@ -127,6 +127,8 @@ export type TrifectaConfig = {
   vault?: {
     enabled?: boolean;
     mode?: TrifectaMode;
+    stale_policy?: 'warn' | 'block';
+    immutable_review_artifacts_per_project?: number;
   };
   lens?: {
     enabled?: boolean;
@@ -194,6 +196,12 @@ export type IdlehandsConfig = {
   show_server_metrics?: boolean;
   auto_detect_model_change?: boolean;
   slow_tg_tps_threshold?: number;
+
+  // Watchdog / cancellation diagnostics
+  watchdog_timeout_ms?: number;
+  watchdog_max_compactions?: number;
+  watchdog_idle_grace_timeouts?: number;
+  debug_abort_reason?: boolean;
 
   // Trifecta subsystems
   trifecta?: TrifectaConfig;
@@ -434,6 +442,14 @@ export type BotTelegramConfig = {
   allow_groups?: boolean;
   /** When true, bot replies are sent as Telegram native replies to the triggering message. Default: false. */
   reply_to_user_messages?: boolean;
+  /** Watchdog inactivity timeout before intervention (ms). Default: 120000. */
+  watchdog_timeout_ms?: number;
+  /** Max watchdog compaction retries before hard cancel. Default: 3. */
+  watchdog_max_compactions?: number;
+  /** Number of inactivity grace cycles before first compaction attempt. Default: 1. */
+  watchdog_idle_grace_timeouts?: number;
+  /** Override debug abort reason reporting for Telegram bot. */
+  debug_abort_reason?: boolean;
   /** Multi-agent personas. Key is agent id. */
   agents?: Record<string, AgentPersona>;
   /** Routing rules for multi-agent mode. */
@@ -469,6 +485,14 @@ export type BotDiscordConfig = {
   guild_id?: string;
   /** When true, bot replies use Discord native reply threading to the triggering message. Default: false. */
   reply_to_user_messages?: boolean;
+  /** Watchdog inactivity timeout before intervention (ms). Default: 120000. */
+  watchdog_timeout_ms?: number;
+  /** Max watchdog compaction retries before hard cancel. Default: 3. */
+  watchdog_max_compactions?: number;
+  /** Number of inactivity grace cycles before first compaction attempt. Default: 1. */
+  watchdog_idle_grace_timeouts?: number;
+  /** Override debug abort reason reporting for Discord bot. */
+  debug_abort_reason?: boolean;
   /** Multi-agent personas. Key is agent id. */
   agents?: Record<string, AgentPersona>;
   /** Routing rules for multi-agent mode. */

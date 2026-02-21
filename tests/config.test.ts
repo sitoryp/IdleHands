@@ -31,7 +31,16 @@ describe('config resolution: CLI > env > file > defaults', () => {
     'IDLEHANDS_SYSTEM_PROMPT_OVERRIDE',
     'IDLEHANDS_ANTON_MAX_RETRIES',
     'IDLEHANDS_ANTON_VERIFY_AI',
-    'IDLEHANDS_NO_SUB_AGENTS'
+    'IDLEHANDS_NO_SUB_AGENTS',
+    'IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY',
+    'IDLEHANDS_VAULT_STALE_POLICY',
+    'IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP',
+    'IDLEHANDS_VAULT_IMMUTABLE_REVIEW_CAP',
+    'IDLEHANDS_WATCHDOG_TIMEOUT_MS',
+    'IDLEHANDS_WATCHDOG_MAX_COMPACTIONS',
+    'IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS',
+    'IDLEHANDS_DEBUG_ABORT_REASON',
+    'IDLEHANDS_DEBUG_CANCEL_REASON'
   ];
 
   before(async () => {
@@ -370,6 +379,66 @@ describe('config resolution: CLI > env > file > defaults', () => {
       cli: { sub_agents: { enabled: false } },
     });
     assert.equal(config.sub_agents?.enabled, false);
+  });
+
+  it('parses review artifact stale policy from env', async () => {
+    process.env.IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY = 'block';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.trifecta?.vault?.stale_policy, 'block');
+    } finally {
+      delete process.env.IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY;
+    }
+  });
+
+  it('invalid review artifact stale policy is ignored', async () => {
+    process.env.IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY = 'explode';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.trifecta?.vault?.stale_policy, undefined);
+    } finally {
+      delete process.env.IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY;
+    }
+  });
+
+  it('parses immutable review artifact cap from env', async () => {
+    process.env.IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP = '12';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.trifecta?.vault?.immutable_review_artifacts_per_project, 12);
+    } finally {
+      delete process.env.IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP;
+    }
+  });
+
+  it('clamps immutable review artifact cap to at least 1', async () => {
+    process.env.IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP = '0';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.trifecta?.vault?.immutable_review_artifacts_per_project, 1);
+    } finally {
+      delete process.env.IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP;
+    }
+  });
+
+  it('parses watchdog settings + debug abort reason from env', async () => {
+    process.env.IDLEHANDS_WATCHDOG_TIMEOUT_MS = '45000';
+    process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS = '7';
+    process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS = '2';
+    process.env.IDLEHANDS_DEBUG_ABORT_REASON = '1';
+
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.watchdog_timeout_ms, 45000);
+      assert.equal(config.watchdog_max_compactions, 7);
+      assert.equal(config.watchdog_idle_grace_timeouts, 2);
+      assert.equal(config.debug_abort_reason, true);
+    } finally {
+      delete process.env.IDLEHANDS_WATCHDOG_TIMEOUT_MS;
+      delete process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS;
+      delete process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS;
+      delete process.env.IDLEHANDS_DEBUG_ABORT_REASON;
+    }
   });
 
 });

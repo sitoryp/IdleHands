@@ -806,6 +806,61 @@ describe('harness behavioral wiring', () => {
     assert.ok(calls <= 3, `expected early break but got ${calls} calls`);
   });
 
+  it('reuses cached output for repeated read-only exec observations instead of hard-breaking', async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), 'idlehands-exec-cache-'));
+    await fs.writeFile(path.join(work, 'notes.txt'), 'hello\nworld\n', 'utf8');
+
+    let calls = 0;
+    const fakeClient: any = {
+      async models() { return { data: [{ id: 'fake-model' }] }; },
+      async warmup() {},
+      async chatStream() {
+        calls++;
+        if (calls <= 7) {
+          return {
+            id: `fake-${calls}`,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: `tool-${calls}`,
+                  type: 'function',
+                  function: { name: 'exec', arguments: JSON.stringify({ command: 'grep -n "hello" notes.txt', timeout: 10 }) }
+                }]
+              }
+            }],
+            usage: { prompt_tokens: 40, completion_tokens: 8 }
+          };
+        }
+
+        return {
+          id: `fake-${calls}`,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'done' } }],
+          usage: { prompt_tokens: 20, completion_tokens: 6 }
+        };
+      }
+    };
+
+    const config = baseConfig(work, { max_iterations: 12, context_window: 8192 });
+    const session = await createSession({ config, runtime: { client: fakeClient } });
+
+    try {
+      const out = await session.ask('find hello in notes');
+      assert.equal(out.text, 'done');
+      assert.ok(calls >= 8, `expected loop to continue instead of hard-break; calls=${calls}`);
+
+      const sawCachedHint = session.messages.some((m: any) =>
+        m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Reused cached output for repeated read-only exec call')
+      );
+      assert.equal(sawCachedHint, true, 'expected cached-observation hint in tool output');
+    } finally {
+      await session.close();
+      await fs.rm(work, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it('nemotron harness limits max_iterations via maxIterationsOverride', async () => {
     let calls = 0;
     const fakeClient: any = {

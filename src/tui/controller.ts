@@ -213,13 +213,30 @@ export class TuiController {
     this.watchdogCompactAttempts = 0;
     this.dispatch({ type: "AGENT_STREAM_START", id });
 
-    const watchdogMs = 120_000;
-    const maxWatchdogCompacts = 3;
+    const watchdogMs = Math.max(30_000, Math.floor(this.config.watchdog_timeout_ms ?? 120_000));
+    const maxWatchdogCompacts = Math.max(0, Math.floor(this.config.watchdog_max_compactions ?? 3));
+    const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(this.config.watchdog_idle_grace_timeouts ?? 1));
+    const debugAbortReason = this.config.debug_abort_reason === true;
     let watchdogCompactPending = false;
+    let watchdogGraceUsed = 0;
+    let watchdogForcedCancel = false;
     const watchdog = setInterval(() => {
       if (!this.inFlight) return;
       if (watchdogCompactPending) return;
       if (Date.now() - this.lastProgressAt > watchdogMs) {
+        if (watchdogGraceUsed < watchdogIdleGraceTimeouts) {
+          watchdogGraceUsed += 1;
+          this.lastProgressAt = Date.now();
+          console.error(`[tui] watchdog inactivity — applying grace period (${watchdogGraceUsed}/${watchdogIdleGraceTimeouts})`);
+          this.dispatch({
+            type: "ALERT_PUSH",
+            id: `watchdog_grace_${Date.now()}`,
+            level: "info",
+            text: "Still working... model is taking longer than usual.",
+          });
+          return;
+        }
+
         if (this.watchdogCompactAttempts < maxWatchdogCompacts) {
           this.watchdogCompactAttempts++;
           watchdogCompactPending = true;
@@ -235,6 +252,7 @@ export class TuiController {
           });
         } else {
           console.error(`[tui] watchdog timeout — max compaction attempts reached, cancelling`);
+          watchdogForcedCancel = true;
           try { this.aborter?.abort(); } catch {}
           try { this.session?.cancel(); } catch {}
         }
@@ -255,11 +273,24 @@ export class TuiController {
         try {
           await this.session.ask(askText, {
             signal: attemptController.signal,
-            onToken: (t) => { this.lastProgressAt = Date.now(); this.dispatch({ type: "AGENT_STREAM_TOKEN", id, token: t }); },
-            onToolCall: (c) => { this.lastProgressAt = Date.now(); this.dispatch({ type: "TOOL_START", id: `${c.name}-${Date.now()}`, name: c.name, detail: JSON.stringify(c.args).slice(0, 120) }); },
+            onToken: (t) => {
+              this.lastProgressAt = Date.now();
+              watchdogGraceUsed = 0;
+              this.dispatch({ type: "AGENT_STREAM_TOKEN", id, token: t });
+            },
+            onToolCall: (c) => {
+              this.lastProgressAt = Date.now();
+              watchdogGraceUsed = 0;
+              this.dispatch({ type: "TOOL_START", id: `${c.name}-${Date.now()}`, name: c.name, detail: JSON.stringify(c.args).slice(0, 120) });
+            },
             onToolResult: async (r) => {
               this.lastProgressAt = Date.now();
+              watchdogGraceUsed = 0;
               this.dispatch({ type: r.success ? "TOOL_END" : "TOOL_ERROR", id: `${r.name}-${Date.now()}`, name: r.name, detail: r.summary });
+            },
+            onTurnEnd: () => {
+              this.lastProgressAt = Date.now();
+              watchdogGraceUsed = 0;
             },
           });
           askComplete = true;
@@ -277,7 +308,19 @@ export class TuiController {
           }
 
           askComplete = true;
-          this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text: msg });
+          if (isAbort) {
+            const reason = String(msg).slice(0, 400);
+            if (watchdogForcedCancel) {
+              const base = `Cancelled by watchdog timeout after ${maxWatchdogCompacts} compaction attempts. Try a smaller scope, a faster model, or increase watchdog timeout/compaction settings.`;
+              const text = debugAbortReason ? `${base}\n\n[debug] ${reason}` : base;
+              this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text });
+            } else {
+              const text = debugAbortReason ? `Cancelled.\n\n[debug] ${reason}` : 'Cancelled.';
+              this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text });
+            }
+          } else {
+            this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text: msg });
+          }
         }
       }
     } finally {

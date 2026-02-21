@@ -27,7 +27,7 @@ Recommended BotFather settings:
 
 Common commands:
 
-- `/new`, `/cancel`, `/status`
+- `/new`, `/cancel`, `/status`, `/watchdog [status]`
 - `/dir <path>`, `/model`, `/approval <mode>`, `/mode <mode>`
 - `/changes`, `/undo`, `/vault <query>`, `/compact`
 - `/hosts`, `/backends`, `/rtmodels`, `/rtstatus`, `/switch <model-id>`
@@ -48,7 +48,7 @@ Recommended configuration:
 
 Common commands:
 
-- `/new`, `/cancel`, `/status`
+- `/new`, `/cancel`, `/status`, `/watchdog [status]`
 - `/dir <path>`, `/model`, `/approval <mode>`, `/mode <mode>`
 - `/changes`, `/undo`, `/vault <query>`, `/compact`
 - `/hosts`, `/backends`, `/rtmodels`, `/rtstatus`, `/switch <model-id>`
@@ -69,6 +69,38 @@ Enable native reply threading if you want quote/reply coupling:
   }
 }
 ```
+
+## Watchdog tuning (slow models / large tasks)
+
+Both Telegram and Discord bots support watchdog tuning so long tasks don't get prematurely cancelled.
+
+```json
+{
+  "watchdog_timeout_ms": 180000,
+  "watchdog_max_compactions": 4,
+  "watchdog_idle_grace_timeouts": 2,
+  "debug_abort_reason": true,
+  "bot": {
+    "telegram": {
+      "watchdog_timeout_ms": 180000,
+      "watchdog_max_compactions": 4,
+      "watchdog_idle_grace_timeouts": 2,
+      "debug_abort_reason": true
+    },
+    "discord": {
+      "watchdog_timeout_ms": 180000,
+      "watchdog_max_compactions": 4,
+      "watchdog_idle_grace_timeouts": 2,
+      "debug_abort_reason": true
+    }
+  }
+}
+```
+
+Notes:
+- top-level watchdog fields apply to TUI and can act as fallback defaults for bots
+- `bot.telegram.*` / `bot.discord.*` overrides top-level values per frontend
+- if `debug_abort_reason` is true, cancel messages include raw abort details (`[debug] ...`) instead of only "Cancelled."
 
 ## Service management
 

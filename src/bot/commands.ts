@@ -24,6 +24,12 @@ type CommandContext = {
     endpoint?: string;
     defaultDir?: string;
     telegram?: BotTelegramConfig;
+    watchdog?: {
+      timeoutMs: number;
+      maxCompactions: number;
+      idleGraceTimeouts: number;
+      debugAbortReason: boolean;
+    };
   };
 };
 
@@ -49,6 +55,7 @@ export async function handleHelp({ ctx }: CommandContext): Promise<void> {
     '/new — Start a new session',
     '/cancel — Abort current generation',
     '/status — Session stats',
+    '/watchdog [status] — Show active watchdog settings',
     '/agent — Show current agent info',
     '/agents — List all configured agents',
     '/escalate [model] — Use larger model for next message',
@@ -110,6 +117,58 @@ export async function handleStatus({ ctx, sessions }: CommandContext): Promise<v
     `<b>State:</b> ${managed.state}`,
     `<b>Queue:</b> ${managed.pendingQueue.length} pending`,
   ];
+  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+}
+
+export async function handleWatchdog({ ctx, sessions, botConfig }: CommandContext): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const text = ctx.message?.text ?? '';
+  const arg = text.replace(/^\/watchdog\s*/i, '').trim().toLowerCase();
+  if (arg && arg !== 'status') {
+    await ctx.reply('Usage: /watchdog or /watchdog status');
+    return;
+  }
+
+  const managed = sessions.get(chatId);
+  const cfg = botConfig.watchdog ?? {
+    timeoutMs: 120_000,
+    maxCompactions: 3,
+    idleGraceTimeouts: 1,
+    debugAbortReason: false,
+  };
+
+  const lines = [
+    '<b>Watchdog Status</b>',
+    '',
+    `<b>Timeout:</b> ${cfg.timeoutMs.toLocaleString()} ms (${Math.round(cfg.timeoutMs / 1000)}s)`,
+    `<b>Max compactions:</b> ${cfg.maxCompactions}`,
+    `<b>Grace windows:</b> ${cfg.idleGraceTimeouts}`,
+    `<b>Debug abort reason:</b> ${cfg.debugAbortReason ? 'on' : 'off'}`,
+  ];
+
+  const aggressive =
+    (cfg.timeoutMs <= 90_000 && cfg.idleGraceTimeouts === 0) ||
+    cfg.timeoutMs <= 60_000 ||
+    cfg.maxCompactions === 0;
+  if (aggressive) {
+    lines.push('');
+    lines.push(`<b>Recommended tuning:</b> ${escapeHtml('watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.')}`);
+  }
+
+  if (managed) {
+    const idleSec = managed.lastProgressAt > 0 ? ((Date.now() - managed.lastProgressAt) / 1000).toFixed(1) : 'n/a';
+    lines.push('');
+    lines.push(`<b>In-flight:</b> ${managed.inFlight ? 'yes' : 'no'}`);
+    lines.push(`<b>State:</b> ${escapeHtml(managed.state)}`);
+    lines.push(`<b>Compaction attempts (turn):</b> ${managed.watchdogCompactAttempts}`);
+    lines.push(`<b>Idle since progress:</b> ${escapeHtml(idleSec)}s`);
+  } else {
+    lines.push('');
+    lines.push('No active session yet. Send a message to start one.');
+  }
+
   await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
 }
 

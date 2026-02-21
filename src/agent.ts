@@ -120,6 +120,63 @@ function toolResultSummary(name: string, args: Record<string, unknown>, content:
   }
 }
 
+const CACHED_EXEC_OBSERVATION_HINT = '[idlehands hint] Reused cached output for repeated read-only exec call (unchanged observation).';
+
+function execCommandFromSig(sig: string): string {
+  if (!sig.startsWith('exec:')) return '';
+  const raw = sig.slice('exec:'.length);
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.command === 'string' ? parsed.command : '';
+  } catch {
+    return '';
+  }
+}
+
+function looksLikeReadOnlyExecCommand(command: string): boolean {
+  const cmd = String(command || '').trim().toLowerCase();
+  if (!cmd) return false;
+
+  // Shell redirects are likely writes.
+  if (/(^|\s)(?:>>?|<<?)\s*/.test(cmd)) return false;
+
+  // Obvious mutators.
+  if (/\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|truncate|dd)\b/.test(cmd)) return false;
+  if (/\b(?:sed|perl)\b[^\n]*\s-i\b/.test(cmd)) return false;
+  if (/\btee\b/.test(cmd)) return false;
+
+  // Git: allow common read-only subcommands, block mutating verbs.
+  if (/\bgit\b/.test(cmd)) {
+    if (/\bgit\b[^\n|;&]*\b(?:add|am|apply|bisect|checkout|switch|clean|clone|commit|fetch|merge|pull|push|rebase|reset|revert|stash)\b/.test(cmd)) {
+      return false;
+    }
+    if (/\bgit\b[^\n|;&]*\b(?:log|show|status|diff|rev-parse|branch(?:\s+--list)?|tag(?:\s+--list)?|ls-files|grep)\b/.test(cmd)) {
+      return true;
+    }
+  }
+
+  if (/^\s*(?:grep|rg|ag|ack|find|ls|cat|head|tail|wc|stat)\b/.test(cmd)) return true;
+  if (/\|\s*(?:grep|rg|ag|ack)\b/.test(cmd)) return true;
+
+  return false;
+}
+
+function withCachedExecObservationHint(content: string): string {
+  if (!content) return content;
+
+  try {
+    const parsed = JSON.parse(content);
+    const out = typeof parsed?.out === 'string' ? parsed.out : '';
+    if (out.includes(CACHED_EXEC_OBSERVATION_HINT)) return content;
+    parsed.out = out ? `${out}\n${CACHED_EXEC_OBSERVATION_HINT}` : CACHED_EXEC_OBSERVATION_HINT;
+    parsed.cached_observation = true;
+    return JSON.stringify(parsed);
+  } catch {
+    if (content.includes(CACHED_EXEC_OBSERVATION_HINT)) return content;
+    return `${content}\n${CACHED_EXEC_OBSERVATION_HINT}`;
+  }
+}
+
 /** Errors that should break the outer agent loop, not be caught by per-tool handlers */
 class AgentLoopBreak extends Error {
   constructor(message: string) {
@@ -924,12 +981,34 @@ function looksLikeCodeReviewRequest(text: string): boolean {
 function looksLikeReviewRetrievalRequest(text: string): boolean {
   const t = text.toLowerCase();
   if (!t.trim()) return false;
+
+  if (/^\s*\/review\s+(?:print|show|replay|latest|last|full)\b/.test(t)) return true;
+
   if (!/\breview\b/.test(t)) return false;
 
+  if (/\bprint\s+stale\s+review\s+anyway\b/.test(t)) return true;
+  if (/\b(?:print|show|display|repeat|paste|send|output|give)\b[^\n.]{0,80}\breview\b[^\n.]{0,40}\b(?:again|back)\b/.test(t)) return true;
   if (/\b(?:print|show|display|repeat|paste|send|output|give)\b[^\n.]{0,80}\b(?:full|entire|complete|whole)\b[^\n.]{0,80}\breview\b/.test(t)) return true;
   if (/\b(?:full|entire|complete|whole)\b[^\n.]{0,30}\bcode\s+review\b/.test(t) && /\b(?:print|show|display|repeat|paste|send|output|give)\b/.test(t)) return true;
   if (/\b(?:print|show|display|repeat|paste|send|output|give)\b[^\n.]{0,80}\b(?:last|latest|previous)\b[^\n.]{0,40}\breview\b/.test(t)) return true;
   return false;
+}
+
+function retrievalAllowsStaleArtifact(text: string): boolean {
+  const t = text.toLowerCase();
+  if (!t.trim()) return false;
+  if (/\bprint\s+stale\s+review\s+anyway\b/.test(t)) return true;
+  if (/\b(?:force|override|ignore)\b[^\n.]{0,80}\b(?:stale|old|previous)\b[^\n.]{0,80}\breview\b/.test(t)) return true;
+  if (/\b(?:stale|old|previous)\b[^\n.]{0,80}\breview\b[^\n.]{0,80}\b(?:anyway|still|force|override|ignore)\b/.test(t)) return true;
+  return false;
+}
+
+type ReviewArtifactStalePolicy = 'warn' | 'block';
+
+function parseReviewArtifactStalePolicy(raw: unknown): ReviewArtifactStalePolicy {
+  const v = typeof raw === 'string' ? raw.toLowerCase().trim() : '';
+  if (v === 'block') return 'block';
+  return 'warn';
 }
 
 function parseReviewArtifact(raw: string): ReviewArtifact | null {
@@ -1299,7 +1378,11 @@ export async function createSession(opts: {
     allowSpawnTask: spawnTaskEnabled,
   });
 
-  const vault = vaultEnabled ? (opts.runtime?.vault ?? new VaultStore()) : undefined;
+  const vault = vaultEnabled
+    ? (opts.runtime?.vault ?? new VaultStore({
+        immutableReviewArtifactsPerProject: (cfg as any)?.trifecta?.vault?.immutable_review_artifacts_per_project,
+      }))
+    : undefined;
   if (vault) {
     // Scope vault entries by project directory to prevent cross-project context leaks
     vault.setProjectDir(cfg.dir ?? process.cwd());
@@ -2359,10 +2442,31 @@ export async function createSession(opts: {
       const latest = vault
         ? await vault.getLatestByKey(reviewKeys.latestKey, 'system').catch(() => null)
         : null;
-      const artifact = latest?.value ? parseReviewArtifact(latest.value) : null;
+      const parsedArtifact = latest?.value ? parseReviewArtifact(latest.value) : null;
+      const artifact = parsedArtifact && parsedArtifact.projectId === reviewKeys.projectId
+        ? parsedArtifact
+        : null;
 
       if (artifact?.content?.trim()) {
         const stale = reviewArtifactStaleReason(artifact, projectDir);
+        const stalePolicy = parseReviewArtifactStalePolicy((cfg as any)?.trifecta?.vault?.stale_policy);
+
+        if (stale && stalePolicy === 'block' && !retrievalAllowsStaleArtifact(rawInstructionText)) {
+          const blocked =
+            `Stored review is stale and retrieval policy is set to block. ${stale}\n` +
+            'Reply with "print stale review anyway" to override, or request a fresh review.';
+
+          messages.push({ role: 'assistant', content: blocked });
+          hookObj.onToken?.(blocked);
+          await hookObj.onTurnEnd?.({
+            turn: turns,
+            toolCalls,
+            promptTokens: cumulativeUsage.prompt,
+            completionTokens: cumulativeUsage.completion,
+          });
+          return { text: blocked, turns, toolCalls };
+        }
+
         const text = stale
           ? `${artifact.content}\n\n[artifact note] ${stale}`
           : artifact.content;
@@ -2455,6 +2559,10 @@ export async function createSession(opts: {
     let repromptUsed = false;
     // Track blocked command loops by exact reason+command signature.
     const blockedExecAttemptsBySig = new Map<string, number>();
+    // Cache successful read-only exec observations by exact signature.
+    const execObservationCacheBySig = new Map<string, string>();
+    // Prevent repeating the same "stop rerunning" reminder every turn.
+    const readOnlyExecHintedSigs = new Set<string>();
     // Keep a lightweight breadcrumb for diagnostics on partial failures.
     let lastSuccessfulTestRun: any = null;
     // One-time nudge to prevent post-success churn after green test runs.
@@ -2872,6 +2980,10 @@ export async function createSession(opts: {
             turnSigs.add(sig);
           }
 
+          // Repeated read-only exec calls can be served from cache instead of hard-breaking.
+          const repeatedReadOnlyExecSigs = new Set<string>();
+          const readOnlyExecTurnHints: string[] = [];
+
           // Track whether a mutation happened since a given signature was last seen.
           // (Tool-loop is single-threaded across turns; this is safe to keep in-memory.)
 
@@ -2897,6 +3009,20 @@ export async function createSession(opts: {
                   await injectVaultContext().catch(() => {});
                 }
                 if (count >= loopThreshold) {
+                  const command = execCommandFromSig(sig);
+                  const canReuseReadOnlyObservation =
+                    looksLikeReadOnlyExecCommand(command) &&
+                    execObservationCacheBySig.has(sig);
+
+                  if (canReuseReadOnlyObservation) {
+                    repeatedReadOnlyExecSigs.add(sig);
+                    if (!readOnlyExecHintedSigs.has(sig)) {
+                      readOnlyExecHintedSigs.add(sig);
+                      readOnlyExecTurnHints.push(command || 'exec command');
+                    }
+                    continue;
+                  }
+
                   const args = sig.slice(toolName.length + 1);
                   const argsPreview = args.length > 220 ? args.slice(0, 220) + '…' : args;
                   throw new Error(
@@ -3087,83 +3213,103 @@ export async function createSession(opts: {
               }
             }
 
+            const sig = `${name}:${rawArgs || '{}'}`;
             let content = '';
-            if (isSpawnTask) {
-              content = await runSpawnTask(args);
-            } else if (builtInFn) {
-              const value = await builtInFn(ctx as any, args);
-              content = typeof value === 'string' ? value : JSON.stringify(value);
-              if (name === 'exec') {
-                // Successful exec clears blocked-loop counters.
-                blockedExecAttemptsBySig.clear();
-                // Capture successful test runs for better partial-failure diagnostics.
-                try {
-                  const parsed = JSON.parse(content);
+            let reusedCachedReadOnlyExec = false;
+
+            if (name === 'exec' && repeatedReadOnlyExecSigs.has(sig)) {
+              const cached = execObservationCacheBySig.get(sig);
+              if (cached) {
+                content = withCachedExecObservationHint(cached);
+                reusedCachedReadOnlyExec = true;
+              }
+            }
+
+            if (!reusedCachedReadOnlyExec) {
+              if (isSpawnTask) {
+                content = await runSpawnTask(args);
+              } else if (builtInFn) {
+                const value = await builtInFn(ctx as any, args);
+                content = typeof value === 'string' ? value : JSON.stringify(value);
+                if (name === 'exec') {
+                  // Successful exec clears blocked-loop counters.
+                  blockedExecAttemptsBySig.clear();
+
                   const cmd = String(args?.command ?? '');
-                  const out = String(parsed?.out ?? '');
-                  const rc = Number(parsed?.rc ?? NaN);
-                  const looksLikeTest = /(^|\s)(node\s+--test|npm\s+test|pnpm\s+test|yarn\s+test|pytest|go\s+test|cargo\s+test|ctest)(\s|$)/i.test(cmd);
-                  if (looksLikeTest && Number.isFinite(rc) && rc === 0) {
-                    lastSuccessfulTestRun = {
-                      command: cmd,
-                      outputPreview: out.slice(0, 400),
-                    };
+                  if (looksLikeReadOnlyExecCommand(cmd)) {
+                    execObservationCacheBySig.set(sig, content);
                   }
-                } catch {
-                  // Ignore parse issues; non-JSON exec output is tolerated.
-                }
-              }
-            } else if (isLspTool && lspManager) {
-              // LSP tool dispatch
-              if (name === 'lsp_diagnostics') {
-                content = await lspManager.getDiagnostics(
-                  typeof args.path === 'string' ? args.path : undefined,
-                  typeof args.severity === 'number' ? args.severity : undefined,
-                );
-              } else if (name === 'lsp_symbols') {
-                content = await buildLspLensSymbolOutput(String(args.path ?? ''));
-              } else if (name === 'lsp_hover') {
-                content = await lspManager.getHover(
-                  String(args.path ?? ''),
-                  Number(args.line ?? 0),
-                  Number(args.character ?? 0),
-                );
-              } else if (name === 'lsp_definition') {
-                content = await lspManager.getDefinition(
-                  String(args.path ?? ''),
-                  Number(args.line ?? 0),
-                  Number(args.character ?? 0),
-                );
-              } else if (name === 'lsp_references') {
-                content = await lspManager.getReferences(
-                  String(args.path ?? ''),
-                  Number(args.line ?? 0),
-                  Number(args.character ?? 0),
-                  typeof args.max_results === 'number' ? args.max_results : 50,
-                );
-              }
-            } else {
-              if (mcpManager == null) {
-                throw new Error(`unknown tool: ${name}`);
-              }
 
-              const mcpReadOnly = isReadOnlyToolDynamic(name);
-              if (!cfg.step_mode && !ctx.noConfirm && !mcpReadOnly) {
-                const prompt = `Execute MCP tool '${name}'? [Y/n]`;
-                const ok = confirmBridge ? await confirmBridge(prompt, { tool: name, args }) : true;
-                if (!ok) {
-                  return { id: callId, content: '[skipped by user: approval]' };
+                  // Capture successful test runs for better partial-failure diagnostics.
+                  try {
+                    const parsed = JSON.parse(content);
+                    const out = String(parsed?.out ?? '');
+                    const rc = Number(parsed?.rc ?? NaN);
+                    const looksLikeTest = /(^|\s)(node\s+--test|npm\s+test|pnpm\s+test|yarn\s+test|pytest|go\s+test|cargo\s+test|ctest)(\s|$)/i.test(cmd);
+                    if (looksLikeTest && Number.isFinite(rc) && rc === 0) {
+                      lastSuccessfulTestRun = {
+                        command: cmd,
+                        outputPreview: out.slice(0, 400),
+                      };
+                    }
+                  } catch {
+                    // Ignore parse issues; non-JSON exec output is tolerated.
+                  }
                 }
-              }
+              } else if (isLspTool && lspManager) {
+                // LSP tool dispatch
+                if (name === 'lsp_diagnostics') {
+                  content = await lspManager.getDiagnostics(
+                    typeof args.path === 'string' ? args.path : undefined,
+                    typeof args.severity === 'number' ? args.severity : undefined,
+                  );
+                } else if (name === 'lsp_symbols') {
+                  content = await buildLspLensSymbolOutput(String(args.path ?? ''));
+                } else if (name === 'lsp_hover') {
+                  content = await lspManager.getHover(
+                    String(args.path ?? ''),
+                    Number(args.line ?? 0),
+                    Number(args.character ?? 0),
+                  );
+                } else if (name === 'lsp_definition') {
+                  content = await lspManager.getDefinition(
+                    String(args.path ?? ''),
+                    Number(args.line ?? 0),
+                    Number(args.character ?? 0),
+                  );
+                } else if (name === 'lsp_references') {
+                  content = await lspManager.getReferences(
+                    String(args.path ?? ''),
+                    Number(args.line ?? 0),
+                    Number(args.character ?? 0),
+                    typeof args.max_results === 'number' ? args.max_results : 50,
+                  );
+                }
+              } else {
+                if (mcpManager == null) {
+                  throw new Error(`unknown tool: ${name}`);
+                }
 
-              const callArgs = args && typeof args === 'object' && !Array.isArray(args)
-                ? args as Record<string, unknown>
-                : {};
-              content = await mcpManager.callTool(name, callArgs);
+                const mcpReadOnly = isReadOnlyToolDynamic(name);
+                if (!cfg.step_mode && !ctx.noConfirm && !mcpReadOnly) {
+                  const prompt = `Execute MCP tool '${name}'? [Y/n]`;
+                  const ok = confirmBridge ? await confirmBridge(prompt, { tool: name, args }) : true;
+                  if (!ok) {
+                    return { id: callId, content: '[skipped by user: approval]' };
+                  }
+                }
+
+                const callArgs = args && typeof args === 'object' && !Array.isArray(args)
+                  ? args as Record<string, unknown>
+                  : {};
+                content = await mcpManager.callTool(name, callArgs);
+              }
             }
 
             // Hook: onToolResult (Phase 8.5 + Phase 7 rich display)
-            const summary = toolResultSummary(name, args, content, true);
+            const summary = reusedCachedReadOnlyExec
+              ? 'cached read-only exec observation (unchanged)'
+              : toolResultSummary(name, args, content, true);
             const resultEvent: ToolResultEvent = { id: callId, name, success: true, summary, result: content };
 
             // Phase 7: populate rich display fields
@@ -3326,6 +3472,20 @@ export async function createSession(opts: {
 
           for (const r of results) {
             messages.push({ role: 'tool', tool_call_id: r.id, content: r.content });
+          }
+
+          if (readOnlyExecTurnHints.length) {
+            const previews = readOnlyExecTurnHints
+              .slice(0, 2)
+              .map((cmd) => cmd.length > 140 ? `${cmd.slice(0, 140)}…` : cmd)
+              .join(' | ');
+            messages.push({
+              role: 'user' as const,
+              content:
+                '[system] You repeated an identical read-only exec command with unchanged arguments. ' +
+                `Idle Hands reused cached observation output instead of rerunning it (${previews}). ` +
+                'Do not call the same read-only command again unless files/history changed; proceed with analysis or final answer.',
+            });
           }
 
           // If tests are green and we've already made edits, nudge for final summary

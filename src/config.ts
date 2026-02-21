@@ -40,6 +40,10 @@ const DEFAULTS: IdlehandsConfig = {
   show_server_metrics: true,
   auto_detect_model_change: true,
   slow_tg_tps_threshold: 10,
+  watchdog_timeout_ms: 120000,
+  watchdog_max_compactions: 3,
+  watchdog_idle_grace_timeouts: 1,
+  debug_abort_reason: false,
   trifecta: {
     enabled: true,
     vault: { enabled: true },
@@ -114,6 +118,13 @@ function parseTrifectaMode(v: string | undefined): 'active' | 'passive' | 'off' 
   if (v == null) return undefined;
   const lower = v.toLowerCase();
   if (lower === 'active' || lower === 'passive' || lower === 'off') return lower;
+  return undefined;
+}
+
+function parseReviewArtifactStalePolicy(v: string | undefined): 'warn' | 'block' | undefined {
+  if (v == null) return undefined;
+  const lower = v.toLowerCase();
+  if (lower === 'warn' || lower === 'block') return lower;
   return undefined;
 }
 
@@ -202,6 +213,10 @@ export async function loadConfig(opts: {
     show_server_metrics: parseBool(process.env.IDLEHANDS_SHOW_SERVER_METRICS),
     auto_detect_model_change: parseBool(process.env.IDLEHANDS_AUTO_DETECT_MODEL_CHANGE),
     slow_tg_tps_threshold: parseNum(process.env.IDLEHANDS_SLOW_TG_TPS_THRESHOLD),
+    watchdog_timeout_ms: parseNum(process.env.IDLEHANDS_WATCHDOG_TIMEOUT_MS),
+    watchdog_max_compactions: parseNum(process.env.IDLEHANDS_WATCHDOG_MAX_COMPACTIONS),
+    watchdog_idle_grace_timeouts: parseNum(process.env.IDLEHANDS_WATCHDOG_IDLE_GRACE_TIMEOUTS),
+    debug_abort_reason: parseBool(process.env.IDLEHANDS_DEBUG_ABORT_REASON ?? process.env.IDLEHANDS_DEBUG_CANCEL_REASON),
     auto_update_check: parseBool(process.env.IDLEHANDS_AUTO_UPDATE_CHECK),
     offline: parseBool(process.env.IDLEHANDS_OFFLINE),
     lsp: {
@@ -247,7 +262,13 @@ export async function loadConfig(opts: {
           if (disabled === undefined) return undefined;
           return !disabled;
         })(),
-        mode: parseTrifectaMode(process.env.IDLEHANDS_VAULT_MODE)
+        mode: parseTrifectaMode(process.env.IDLEHANDS_VAULT_MODE),
+        stale_policy: parseReviewArtifactStalePolicy(
+          process.env.IDLEHANDS_REVIEW_ARTIFACT_STALE_POLICY ?? process.env.IDLEHANDS_VAULT_STALE_POLICY
+        ),
+        immutable_review_artifacts_per_project: parseNum(
+          process.env.IDLEHANDS_REVIEW_ARTIFACT_IMMUTABLE_CAP ?? process.env.IDLEHANDS_VAULT_IMMUTABLE_REVIEW_CAP
+        )
       },
       lens: {
         enabled: (() => {
@@ -409,6 +430,17 @@ export async function loadConfig(opts: {
     const parsedMode = parseTrifectaMode(merged.trifecta.vault.mode);
     if (parsedMode) merged.trifecta.vault.mode = parsedMode;
     else if (merged.trifecta.vault.mode) delete merged.trifecta.vault.mode;
+
+    const parsedStale = parseReviewArtifactStalePolicy(merged.trifecta.vault.stale_policy);
+    if (parsedStale) merged.trifecta.vault.stale_policy = parsedStale;
+    else if (merged.trifecta.vault.stale_policy) delete merged.trifecta.vault.stale_policy;
+
+    if (typeof merged.trifecta.vault.immutable_review_artifacts_per_project === 'number') {
+      merged.trifecta.vault.immutable_review_artifacts_per_project = Math.max(
+        1,
+        Math.floor(merged.trifecta.vault.immutable_review_artifacts_per_project)
+      );
+    }
   }
 
   // Anton validation
@@ -459,6 +491,15 @@ export async function loadConfig(opts: {
   }
   if (typeof merged.slow_tg_tps_threshold === 'number') {
     merged.slow_tg_tps_threshold = Math.max(1, merged.slow_tg_tps_threshold);
+  }
+  if (typeof merged.watchdog_timeout_ms === 'number') {
+    merged.watchdog_timeout_ms = Math.max(30_000, Math.floor(merged.watchdog_timeout_ms));
+  }
+  if (typeof merged.watchdog_max_compactions === 'number') {
+    merged.watchdog_max_compactions = Math.max(0, Math.floor(merged.watchdog_max_compactions));
+  }
+  if (typeof merged.watchdog_idle_grace_timeouts === 'number') {
+    merged.watchdog_idle_grace_timeouts = Math.max(0, Math.floor(merged.watchdog_idle_grace_timeouts));
   }
 
   // Normalize mode

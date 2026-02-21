@@ -287,6 +287,10 @@ export async function startDiscordBot(config: IdlehandsConfig, botConfig: BotDis
   const approvalMode = normalizeApprovalMode(botConfig.approval_mode, config.approval_mode ?? 'auto-edit');
   const defaultDir = botConfig.default_dir || projectDir(config);
   const replyToUserMessages = botConfig.reply_to_user_messages === true;
+  const watchdogMs = Math.max(30_000, Math.floor(botConfig.watchdog_timeout_ms ?? config.watchdog_timeout_ms ?? 120_000));
+  const maxWatchdogCompacts = Math.max(0, Math.floor(botConfig.watchdog_max_compactions ?? config.watchdog_max_compactions ?? 3));
+  const watchdogIdleGraceTimeouts = Math.max(0, Math.floor(botConfig.watchdog_idle_grace_timeouts ?? config.watchdog_idle_grace_timeouts ?? 1));
+  const debugAbortReason = (botConfig.debug_abort_reason ?? config.debug_abort_reason) === true;
 
   const sessions = new Map<string, ManagedSession>();
 
@@ -303,6 +307,39 @@ export async function startDiscordBot(config: IdlehandsConfig, botConfig: BotDis
   const sendUserVisible = async (msg: Message, content: string) => {
     if (replyToUserMessages) return await msg.reply(content);
     return await (msg.channel as any).send(content);
+  };
+
+  const watchdogStatusText = (managed?: ManagedSession): string => {
+    const lines = [
+      '**Watchdog Status**',
+      `Timeout: ${watchdogMs.toLocaleString()} ms (${Math.round(watchdogMs / 1000)}s)`,
+      `Max compactions: ${maxWatchdogCompacts}`,
+      `Grace windows: ${watchdogIdleGraceTimeouts}`,
+      `Debug abort reason: ${debugAbortReason ? 'on' : 'off'}`,
+    ];
+
+    const aggressive =
+      (watchdogMs <= 90_000 && watchdogIdleGraceTimeouts === 0) ||
+      watchdogMs <= 60_000 ||
+      maxWatchdogCompacts === 0;
+    if (aggressive) {
+      lines.push('');
+      lines.push('Recommended tuning: watchdog_timeout_ms >= 120000, watchdog_idle_grace_timeouts >= 1, watchdog_max_compactions >= 2 for slow/large tasks.');
+    }
+
+    if (managed) {
+      const idleSec = managed.lastProgressAt > 0 ? ((Date.now() - managed.lastProgressAt) / 1000).toFixed(1) : 'n/a';
+      lines.push('');
+      lines.push(`In-flight: ${managed.inFlight ? 'yes' : 'no'}`);
+      lines.push(`State: ${managed.state}`);
+      lines.push(`Compaction attempts (turn): ${managed.watchdogCompactAttempts}`);
+      lines.push(`Idle since progress: ${idleSec}s`);
+    } else {
+      lines.push('');
+      lines.push('No active session yet. Send a message to start one.');
+    }
+
+    return lines.join('\n');
   };
 
   async function getOrCreate(msg: Message): Promise<ManagedSession | null> {
@@ -561,17 +598,43 @@ When you escalate, your request will be re-run on a more capable model.`;
       onToken: (t) => {
         if (!isTurnActive(managed, turnId)) return;
         markProgress(managed, turnId);
+        watchdogGraceUsed = 0;
         streamed += t;
+      },
+      onToolCall: () => {
+        if (!isTurnActive(managed, turnId)) return;
+        markProgress(managed, turnId);
+        watchdogGraceUsed = 0;
+      },
+      onToolResult: () => {
+        if (!isTurnActive(managed, turnId)) return;
+        markProgress(managed, turnId);
+        watchdogGraceUsed = 0;
+      },
+      onTurnEnd: () => {
+        if (!isTurnActive(managed, turnId)) return;
+        markProgress(managed, turnId);
+        watchdogGraceUsed = 0;
       },
     };
 
-    const watchdogMs = 120_000;
-    const maxWatchdogCompacts = 3;
     let watchdogCompactPending = false;
+    let watchdogGraceUsed = 0;
+    let watchdogForcedCancel = false;
     const watchdog = setInterval(() => {
       if (!isTurnActive(managed, turnId)) return;
       if (watchdogCompactPending) return;
       if (Date.now() - managed.lastProgressAt > watchdogMs) {
+        if (watchdogGraceUsed < watchdogIdleGraceTimeouts) {
+          watchdogGraceUsed += 1;
+          managed.lastProgressAt = Date.now();
+          console.error(`[bot:discord] ${managed.userId} watchdog inactivity on turn ${turnId} — applying grace period (${watchdogGraceUsed}/${watchdogIdleGraceTimeouts})`);
+          if (placeholder) {
+            void placeholder.edit('⏳ Still working... model is taking longer than usual.').catch(() => {});
+          }
+          return;
+        }
+
         if (managed.watchdogCompactAttempts < maxWatchdogCompacts) {
           managed.watchdogCompactAttempts++;
           watchdogCompactPending = true;
@@ -588,6 +651,7 @@ When you escalate, your request will be re-run on a more capable model.`;
           });
         } else {
           console.error(`[bot:discord] ${managed.userId} watchdog timeout on turn ${turnId} — max compaction attempts reached, cancelling`);
+          watchdogForcedCancel = true;
           cancelActive(managed);
         }
       }
@@ -694,8 +758,17 @@ When you escalate, your request will be re-run on a more capable model.`;
           // If aborted by watchdog after max compaction attempts, it's a real cancel
           if (!isTurnActive(managed, turnId)) return;
           if (isAbort) {
-            if (placeholder) await placeholder.edit('⏹ Cancelled.').catch(() => {});
-            else await sendUserVisible(msg, '⏹ Cancelled.').catch(() => {});
+            const abortReason = raw.slice(0, 400);
+            if (watchdogForcedCancel) {
+              const timeoutMsg = `⏹ Cancelled by watchdog timeout after ${maxWatchdogCompacts} compaction attempts. Try a smaller scope, a faster model, or increase watchdog timeout/compaction settings.`;
+              const fullMsg = debugAbortReason ? `${timeoutMsg}\n\n[debug] ${abortReason}` : timeoutMsg;
+              if (placeholder) await placeholder.edit(fullMsg).catch(() => {});
+              else await sendUserVisible(msg, fullMsg).catch(() => {});
+            } else {
+              const plain = debugAbortReason ? `⏹ Cancelled.\n\n[debug] ${abortReason}` : '⏹ Cancelled.';
+              if (placeholder) await placeholder.edit(plain).catch(() => {});
+              else await sendUserVisible(msg, plain).catch(() => {});
+            }
           } else {
             const errMsg = raw.slice(0, 400);
             if (placeholder) {
@@ -779,6 +852,7 @@ When you escalate, your request will be re-run on a more capable model.`;
     console.error(`[bot:discord] Allowed users: [${[...allowedUsers].join(', ')}]`);
     console.error(`[bot:discord] Default dir: ${defaultDir}`);
     console.error(`[bot:discord] Approval: ${approvalMode}`);
+    console.error(`[bot:discord] Watchdog: timeout=${watchdogMs}ms compactions=${maxWatchdogCompacts} grace=${watchdogIdleGraceTimeouts}`);
     if (allowGuilds) {
       console.error(`[bot:discord] Guild mode enabled${guildId ? ` (guild ${guildId})` : ''}`);
     }
@@ -799,6 +873,7 @@ When you escalate, your request will be re-run on a more capable model.`;
         new SlashCommandBuilder().setName('help').setDescription('Show available commands'),
         new SlashCommandBuilder().setName('new').setDescription('Start a new session'),
         new SlashCommandBuilder().setName('status').setDescription('Show session statistics'),
+        new SlashCommandBuilder().setName('watchdog').setDescription('Show watchdog settings/status'),
         new SlashCommandBuilder().setName('agent').setDescription('Show current agent info'),
         new SlashCommandBuilder().setName('agents').setDescription('List all configured agents'),
         new SlashCommandBuilder().setName('cancel').setDescription('Cancel the current operation'),
@@ -848,7 +923,7 @@ When you escalate, your request will be re-run on a more capable model.`;
     } as unknown as Message;
     
     // Defer reply for commands that might take a while
-    if (cmd === 'status' || cmd === 'agent' || cmd === 'agents') {
+    if (cmd === 'status' || cmd === 'watchdog' || cmd === 'agent' || cmd === 'agents') {
       await interaction.deferReply();
     }
     
@@ -864,6 +939,7 @@ When you escalate, your request will be re-run on a more capable model.`;
           '/help — This message',
           '/new — Start fresh session',
           '/status — Session stats',
+          '/watchdog — Show watchdog settings/status',
           '/agent — Show current agent',
           '/agents — List all configured agents',
           '/cancel — Abort running task',
@@ -893,6 +969,11 @@ When you escalate, your request will be re-run on a more capable model.`;
           ];
           await interaction.editReply(lines.join('\n'));
         }
+        break;
+      }
+      case 'watchdog': {
+        const managed = sessions.get(key);
+        await interaction.editReply(watchdogStatusText(managed));
         break;
       }
       case 'agent': {
@@ -1090,6 +1171,7 @@ When you escalate, your request will be re-run on a more capable model.`;
         '/new — Start a new session',
         '/cancel — Abort current generation',
         '/status — Session stats',
+        '/watchdog [status] — Show watchdog settings/status',
         '/agent — Show current agent',
         '/agents — List all configured agents',
         '/escalate [model] — Use larger model for next message',
@@ -1285,6 +1367,16 @@ When you escalate, your request will be re-run on a more capable model.`;
           `Queue: ${managed.pendingQueue.length}/${maxQueue}`,
         ].join('\n'),
       ).catch(() => {});
+      return;
+    }
+
+    if (content === '/watchdog' || content === '/watchdog status') {
+      await sendUserVisible(msg, watchdogStatusText(managed)).catch(() => {});
+      return;
+    }
+
+    if (content.startsWith('/watchdog ')) {
+      await sendUserVisible(msg, 'Usage: /watchdog or /watchdog status').catch(() => {});
       return;
     }
 
