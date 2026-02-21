@@ -621,13 +621,12 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   });
 
   // ---------------------------------------------------------------------------
-  // Message handler (core flow)
+  // Message handler (core flow) - Handle both text and photos
   // ---------------------------------------------------------------------------
 
-  bot.on('message:text', async (ctx) => {
+  const handleUserMessage = async (ctx: any, text: string, photos?: any[]) => {
     const chatId = ctx.chat.id;
     const userId = ctx.from.id;
-    let text = ctx.message.text;
 
     // Skip commands (already handled above)
     if (text.startsWith('/')) return;
@@ -642,7 +641,19 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
 
       // Strip the bot mention from text so the agent sees clean input
       if (mentionPattern) text = text.replace(mentionPattern, '').trim();
-      if (!text) return; // Nothing left after stripping mention
+      if (!text && !photos?.length) return; // Nothing left after stripping mention
+    }
+
+    // Add photo attachments to text
+    if (photos && photos.length > 0) {
+      for (const photo of photos) {
+        const fileLink = await ctx.api.getFile(photo.file_id);
+        if (fileLink.file_path) {
+          const photoUrl = `https://api.telegram.org/file/bot${ctx.api.token}/${fileLink.file_path}`;
+          text += `\n\n![Photo](${photoUrl})`;
+        }
+      }
+      console.error(`[bot] ${chatId} sent ${photos.length} photo(s)`);
     }
 
     const msgPreview = text.length > 50 ? text.slice(0, 47) + '...' : text;
@@ -683,6 +694,17 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
         debugAbortReason,
       },
     );
+  };
+
+  // Text message handler
+  bot.on('message:text', async (ctx) => {
+    await handleUserMessage(ctx, ctx.message.text);
+  });
+
+  // Photo message handler  
+  bot.on('message:photo', async (ctx) => {
+    const caption = ctx.message.caption || 'What do you see in this image?';
+    await handleUserMessage(ctx, caption, ctx.message.photo);
   });
 
   // ---------------------------------------------------------------------------
@@ -1051,12 +1073,28 @@ async function processMessage(
       managed.activeAbortController = attemptController;
       turn.controller = attemptController;
 
-      const askText = isRetryAfterCompaction
+      let askText = isRetryAfterCompaction
         ? 'Continue working on the task from where you left off. Context was compacted to free memory — do NOT restart from the beginning.'
         : text;
 
+      // Process images with expandPromptImages if vision model
+      const supportsVision = managed.session.supportsVision;
+      let expandedContent: any = askText;
+      if (supportsVision && !isRetryAfterCompaction) {
+        const { expandPromptImages } = await import('../cli/input.js');
+        const { projectDir } = await import('../utils.js');
+        const expanded = await expandPromptImages(askText, projectDir(managed.config), supportsVision, true);
+        expandedContent = expanded.content;
+        if (expanded.warnings.length > 0) {
+          console.error(`[bot] ${managed.chatId} image warnings:`, expanded.warnings);
+        }
+        if (expanded.imageMetadata && expanded.imageMetadata.length > 0) {
+          console.error(`[bot] ${managed.chatId} extracted metadata for ${expanded.imageMetadata.length} image(s)`);
+        }
+      }
+
       try {
-        const result = await managed.session.ask(askText, { ...hooks, signal: attemptController.signal });
+        const result = await managed.session.ask(expandedContent, { ...hooks, signal: attemptController.signal });
         askComplete = true;
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.error(`[bot] ${managed.chatId} ask() completed: ${result.turns} turns, ${result.toolCalls} tool calls, ${elapsed}s`);

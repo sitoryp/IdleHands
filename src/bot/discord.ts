@@ -665,12 +665,41 @@ When you escalate, your request will be re-run on a more capable model.`;
         turn.controller = attemptController;
         streamed = '';
 
-        const askText = isRetryAfterCompaction
+        let askText = isRetryAfterCompaction
           ? 'Continue working on the task from where you left off. Context was compacted to free memory — do NOT restart from the beginning.'
           : msg.content;
 
+        // Handle image attachments
+        if (!isRetryAfterCompaction && msg.attachments.size > 0) {
+          let hasImages = false;
+          for (const attachment of msg.attachments.values()) {
+            if (attachment.contentType?.startsWith('image/')) {
+              askText += `\n\n![Attachment](${attachment.url})`;
+              hasImages = true;
+            }
+          }
+          if (hasImages) {
+            console.error(`[bot:discord] ${managed.userId} sent ${msg.attachments.size} attachment(s) including images`);
+          }
+        }
+
+        // Process images with expandPromptImages if vision model
+        const supportsVision = managed.session.supportsVision;
+        let expandedContent: any = askText;
+        if (supportsVision) {
+          const { expandPromptImages } = await import('../cli/input.js');
+          const expanded = await expandPromptImages(askText, projectDir(managed.config), supportsVision, true);
+          expandedContent = expanded.content;
+          if (expanded.warnings.length > 0) {
+            console.error(`[bot:discord] ${managed.userId} image warnings:`, expanded.warnings);
+          }
+          if (expanded.imageMetadata && expanded.imageMetadata.length > 0) {
+            console.error(`[bot:discord] ${managed.userId} extracted metadata for ${expanded.imageMetadata.length} image(s)`);
+          }
+        }
+
         try {
-          const result = await managed.session.ask(askText, { ...hooks, signal: attemptController.signal });
+          const result = await managed.session.ask(expandedContent, { ...hooks, signal: attemptController.signal });
           askComplete = true;
           if (!isTurnActive(managed, turnId)) return;
           markProgress(managed, turnId);
