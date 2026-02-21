@@ -6,7 +6,7 @@ import { stateDir, randomId } from './utils.js';
 export type Checkpoint = {
   id: string;
   ts: string;
-  op: 'write_file' | 'edit_file' | 'insert_file' | 'undo' | 'other';
+  op: 'write_file' | 'edit_file' | 'edit_range' | 'insert_file' | 'apply_patch' | 'undo' | 'other';
   filePath: string;
   sha256_before: string;
   sha256_after?: string;
