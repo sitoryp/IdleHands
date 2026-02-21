@@ -22,8 +22,19 @@ Build a robust image parsing and analysis tool that integrates with IdleHands' t
 
 ### Phase 1: Core `read_image` Tool
 **File:** `src/tools.ts`
+**Status:** ✅ **COMPLETE**
 
-Add new tool function:
+Implementation:
+- Tool function: `read_image()` at line 1243
+- Helpers: `isImageBuffer()`, `parseBase64Data()`, `getImageFormat()`
+- Metadata: width, height, format, size, MIME type via `image-size`
+- Security: `checkPathSafety()`, size limits (10MB, 16k pixels)
+- Formats: PNG, JPEG, GIF, WebP, BMP, TIFF
+
+Dependencies:
+- `"image-size": "^1.2.0"` added to `package.json`
+
+**Features:**
 ```typescript
 export async function read_image(
   ctx: ToolContext,
