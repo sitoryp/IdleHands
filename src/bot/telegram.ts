@@ -157,12 +157,11 @@ class StreamingMessage {
   private backoffMs = 0;
 
   private statusLine = '⏳ Thinking...';
-  private bannerText: string | null = null;
   private progress: TurnProgressController;
   private tails = new ToolTailBuffer({ maxChars: 4096, maxLines: 4 });
   private activeToolId: string | null = null;
   private renderer = new ProgressMessageRenderer({
-    maxToolLines: 6,
+    maxToolLines: 8,
     maxTailLines: 4,
     maxAssistantChars: 2400,
   });
@@ -257,10 +256,6 @@ class StreamingMessage {
     this.progress.hooks.onTurnEnd?.(stats);
   }
 
-  setBanner(text: string | null): void {
-    this.bannerText = text?.trim() ? text.trim() : null;
-  }
-
   private startEditLoop(): void {
     this.editTimer = setInterval(() => this.flush(), this.editIntervalMs);
   }
@@ -295,7 +290,6 @@ class StreamingMessage {
     const tail = this.activeToolId ? this.tails.get(this.activeToolId) : null;
 
     const doc = this.renderer.render({
-      banner: this.bannerText,
       statusLine: this.statusLine,
       toolLines: this.toolLines,
       toolTail: tail ? { name: tail.name, stream: tail.stream, lines: tail.lines } : null,
@@ -1084,18 +1078,14 @@ async function processMessage(
       if (current.watchdogCompactAttempts < maxWatchdogCompacts) {
         current.watchdogCompactAttempts++;
         watchdogCompactPending = true;
-        const compactBanner = `🔄 Context too large — compacting and retrying (attempt ${current.watchdogCompactAttempts}/${maxWatchdogCompacts})...`;
-        streaming.setBanner(compactBanner);
         console.error(`[bot:telegram] ${managed.chatId} watchdog timeout on turn ${turnId} — compacting and retrying (attempt ${current.watchdogCompactAttempts}/${maxWatchdogCompacts})`);
         try { current.activeAbortController?.abort(); } catch {}
         current.session.compactHistory({ force: true }).then((result) => {
           console.error(`[bot:telegram] ${managed.chatId} watchdog compaction: freed ${result.freedTokens} tokens, dropped ${result.droppedMessages} messages`);
           current.lastProgressAt = Date.now();
-          streaming.setBanner(null);
           watchdogCompactPending = false;
         }).catch((e: any) => {
           console.error(`[bot:telegram] ${managed.chatId} watchdog compaction failed: ${e?.message ?? e}`);
-          streaming.setBanner(null);
           watchdogCompactPending = false;
         });
       } else {

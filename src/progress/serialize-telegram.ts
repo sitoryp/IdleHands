@@ -13,7 +13,7 @@ function spanToHtml(s: IRSpan): string {
     case 'code':
       return `<code>${t}</code>`;
     case 'dim':
-      // Telegram HTML doesn’t have a "dim" style. Use italics as a soft cue.
+      // Telegram HTML doesn't have dim; italic is a good soft cue.
       return `<i>${t}</i>`;
     default:
       return t;
@@ -22,10 +22,8 @@ function spanToHtml(s: IRSpan): string {
 
 function blockToHtml(b: IRBlock): string {
   switch (b.type) {
-    case 'spacer': {
-      const n = Math.max(1, b.lines ?? 1);
-      return '\n'.repeat(n);
-    }
+    case 'spacer':
+      return '\n'.repeat(Math.max(1, b.lines ?? 1));
     case 'divider':
       return '────────';
     case 'lines':
@@ -48,9 +46,7 @@ export function renderTelegramHtml(doc: IRDoc, opts?: TelegramRenderOptions): st
 
   for (const block of doc.blocks ?? []) {
     const piece = blockToHtml(block);
-
-    // Add a blank line between non-spacer blocks
-    const sep = (parts.length && block.type !== 'spacer') ? '\n\n' : '';
+    const sep = parts.length ? '\n\n' : '';
     const add = sep + piece;
 
     if (used + add.length > maxLen) {
@@ -64,7 +60,6 @@ export function renderTelegramHtml(doc: IRDoc, opts?: TelegramRenderOptions): st
 
   let out = parts.join('');
   if (truncated && out.length + 2 <= maxLen) out += '\n…';
-  if (!out.trim()) out = '⏳ Thinking…';
-
+  if (!out.trim()) out = '⏳ Thinking...';
   return out;
 }
