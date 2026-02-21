@@ -771,6 +771,19 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
     const connectionTimeout = Math.max(10, parseInt(connectionTimeoutStr, 10) || responseTimeout);
 
     console.log();
+    console.log(`  ${BOLD}Initial connection check${RESET}`);
+    info('Run a fast preflight check before first ask to fail quickly when endpoint is down.');
+    const currentInitialConnCheck = existingConfig?.initial_connection_check !== false;
+    const initialConnectionCheck = await askYN(rl, 'Enable initial connection check?', currentInitialConnCheck);
+
+    console.log();
+    console.log(`  ${BOLD}Initial connection timeout${RESET}`);
+    info('Timeout for the first preflight check only.');
+    const currentInitialConnTimeout = existingConfig?.initial_connection_timeout ?? 10;
+    const initialConnectionTimeoutStr = await ask(rl, 'Seconds', String(currentInitialConnTimeout));
+    const initialConnectionTimeout = Math.max(1, parseInt(initialConnectionTimeoutStr, 10) || 10);
+
+    console.log();
     console.log(`  ${BOLD}Max iterations${RESET}`);
     info('Tool rounds per prompt. Higher = more complex tasks.');
     const currentMaxIter = existingConfig?.max_iterations ?? 100;
@@ -922,6 +935,8 @@ export async function runSetup(existingConfigPath?: string): Promise<SetupResult
       finalConfig.no_confirm = approvalMode === 'yolo';
       finalConfig.response_timeout = responseTimeout;
       finalConfig.connection_timeout = connectionTimeout;
+      finalConfig.initial_connection_check = initialConnectionCheck;
+      finalConfig.initial_connection_timeout = initialConnectionTimeout;
       finalConfig.max_iterations = maxIterations;
       finalConfig.theme = theme;
       finalConfig.sub_agents = {

@@ -35,4 +35,7 @@ export type TuiEvent =
   | { type: "SETTINGS_OPEN"; items: import('./types.js').SettingsMenuItem[] }
   | { type: "SETTINGS_MOVE"; delta: number }
   | { type: "SETTINGS_UPDATE"; items: import('./types.js').SettingsMenuItem[]; selectedIndex?: number }
-  | { type: "SETTINGS_CLOSE" };
+  | { type: "SETTINGS_CLOSE" }
+  | { type: "HOOKS_INSPECTOR_OPEN"; mode: 'status' | 'errors' | 'slow' | 'plugins'; lines: string[] }
+  | { type: "HOOKS_INSPECTOR_MOVE"; delta: number }
+  | { type: "HOOKS_INSPECTOR_CLOSE" };

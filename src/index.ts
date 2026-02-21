@@ -222,6 +222,8 @@ async function main() {
     timeout: asNum(args.timeout),
     response_timeout: asNum(args['response-timeout'] ?? args.response_timeout),
     connection_timeout: asNum(args['connection-timeout'] ?? args.connection_timeout),
+    initial_connection_check: asBool(args['initial-connection-check'] ?? args.initial_connection_check),
+    initial_connection_timeout: asNum(args['initial-connection-timeout'] ?? args.initial_connection_timeout),
     max_iterations: asNum(args['max-iterations'] ?? args.max_iterations),
     context_window: asNum(args['context-window'] ?? args.context_window),
     approval_mode: typeof args['approval-mode'] === 'string'

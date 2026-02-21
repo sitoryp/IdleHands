@@ -20,8 +20,10 @@ export function createInitialTuiState(): TuiState {
     isStreaming: false,
     streamTargetId: undefined,
     confirmPending: undefined,
+    branchPicker: undefined,
     stepNavigator: undefined,
     settingsMenu: undefined,
+    hooksInspector: undefined,
     scroll: { transcript: 0, input: 0, status: 0, tools: 0, alerts: 0 },
   };
 }
@@ -175,7 +177,7 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
       return { ...state, scroll: { ...state.scroll, [ev.panel]: Math.max(0, ev.value) } };
 
     case "BRANCH_PICKER_OPEN":
-      return { ...state, branchPicker: { branches: ev.branches, selectedIndex: 0, action: ev.action }, stepNavigator: undefined, settingsMenu: undefined };
+      return { ...state, branchPicker: { branches: ev.branches, selectedIndex: 0, action: ev.action }, stepNavigator: undefined, settingsMenu: undefined, hooksInspector: undefined };
 
     case "BRANCH_PICKER_MOVE": {
       if (!state.branchPicker) return state;
@@ -198,6 +200,7 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
         stepNavigator: { items: filtered, selectedIndex: 0, query: q },
         branchPicker: undefined,
         settingsMenu: undefined,
+        hooksInspector: undefined,
       };
     }
 
@@ -213,7 +216,7 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
       return { ...state, stepNavigator: undefined };
 
     case "SETTINGS_OPEN":
-      return { ...state, settingsMenu: { items: ev.items, selectedIndex: 0 }, branchPicker: undefined, stepNavigator: undefined };
+      return { ...state, settingsMenu: { items: ev.items, selectedIndex: 0 }, branchPicker: undefined, stepNavigator: undefined, hooksInspector: undefined };
 
     case "SETTINGS_MOVE": {
       if (!state.settingsMenu) return state;
@@ -233,6 +236,25 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
 
     case "SETTINGS_CLOSE":
       return { ...state, settingsMenu: undefined };
+
+    case "HOOKS_INSPECTOR_OPEN":
+      return {
+        ...state,
+        hooksInspector: { mode: ev.mode, lines: ev.lines, offset: 0 },
+        branchPicker: undefined,
+        stepNavigator: undefined,
+        settingsMenu: undefined,
+      };
+
+    case "HOOKS_INSPECTOR_MOVE": {
+      if (!state.hooksInspector) return state;
+      const max = Math.max(0, state.hooksInspector.lines.length - 1);
+      const next = Math.max(0, Math.min(max, state.hooksInspector.offset + ev.delta));
+      return { ...state, hooksInspector: { ...state.hooksInspector, offset: next } };
+    }
+
+    case "HOOKS_INSPECTOR_CLOSE":
+      return { ...state, hooksInspector: undefined };
 
     default:
       return state;

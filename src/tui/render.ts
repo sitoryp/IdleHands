@@ -171,6 +171,41 @@ function buildSettingsOverlay(state: TuiState, width: number, height: number): s
   return [`${C.bold}${top}${C.reset}`, ...mid, `${C.bold}${bot}${C.reset}`];
 }
 
+function buildHooksInspectorOverlay(state: TuiState, width: number, height: number): string[] {
+  const inspector = state.hooksInspector;
+  if (!inspector) return [];
+
+  const inner = Math.max(20, width - 2);
+  const lines: string[] = [];
+  lines.push(`${C.bold}Hook Inspector${C.reset} (${inspector.mode})  (↑/↓ scroll, Esc close)`);
+  lines.push('');
+
+  const visibleRows = Math.max(4, height - 4);
+  const start = Math.max(0, Math.min(inspector.offset, Math.max(0, inspector.lines.length - visibleRows)));
+  const slice = inspector.lines.slice(start, start + visibleRows);
+
+  if (!slice.length) {
+    lines.push(`${C.dim}No data.${C.reset}`);
+  } else {
+    lines.push(...slice);
+  }
+
+  const remaining = Math.max(0, inspector.lines.length - (start + slice.length));
+  if (start > 0 || remaining > 0) {
+    lines.push('');
+    lines.push(`${C.dim}scroll:${C.reset} ${start} lines above, ${remaining} below`);
+  }
+
+  const contentRows = Math.max(4, height - 2);
+  const body = lines.slice(0, contentRows).map((l) => truncate(l, inner - 2));
+  while (body.length < contentRows) body.push('');
+
+  const top = `┌${'─'.repeat(inner)}┐`;
+  const mid = body.map((line) => `│ ${line.padEnd(inner - 2)} │`);
+  const bot = `└${'─'.repeat(inner)}┘`;
+  return [`${C.bold}${top}${C.reset}`, ...mid, `${C.bold}${bot}${C.reset}`];
+}
+
 export function renderTui(state: TuiState): void {
   const layout = calculateLayout(process.stdout.rows ?? 30, process.stdout.columns ?? 120);
   const cols = layout.cols;
@@ -191,7 +226,7 @@ export function renderTui(state: TuiState): void {
     `${C.dim}backend=${C.reset}${runtime?.backendId ?? '-'}`,
     `${C.dim}endpoint=${C.reset}${runtime?.endpoint ?? '-'}`,
     `${C.dim}health=${C.reset}${health}`,
-    `${C.dim}keys=${C.reset}^G steps ^O settings`,
+    `${C.dim}keys=${C.reset}^G steps ^O settings /hooks`,
   ].join(' | ');
   process.stdout.write(truncate(s2, cols) + '\n');
 
@@ -242,7 +277,10 @@ export function renderTui(state: TuiState): void {
         : state.settingsMenu
           ? buildSettingsOverlay(state, Math.min(Math.max(44, Math.floor(cols * 0.8)), cols - 2),
               Math.min(layout.transcriptRows, Math.max(10, Math.floor(layout.transcriptRows * 0.92))))
-          : null;
+          : state.hooksInspector
+            ? buildHooksInspectorOverlay(state, Math.min(Math.max(50, Math.floor(cols * 0.85)), cols - 2),
+                Math.min(layout.transcriptRows, Math.max(10, Math.floor(layout.transcriptRows * 0.92))))
+            : null;
 
   if (activeOverlay) {
     const boxW = Math.min(Math.max(36, Math.floor(cols * 0.75)), cols - 2);

@@ -14,6 +14,8 @@ const DEFAULTS: IdlehandsConfig = {
   max_iterations: 100,
   response_timeout: 600,
   connection_timeout: 600,
+  initial_connection_check: true,
+  initial_connection_timeout: 10,
   approval_mode: 'auto-edit',
   no_confirm: false,
   verbose: false,
@@ -50,6 +52,7 @@ const DEFAULTS: IdlehandsConfig = {
     strict: false,
     plugin_paths: [],
     warn_ms: 250,
+    allow_capabilities: ['observe'],
   },
   trifecta: {
     enabled: true,
@@ -198,6 +201,8 @@ export async function loadConfig(opts: {
     max_iterations: parseNum(process.env.IDLEHANDS_MAX_ITERATIONS),
     response_timeout: parseNum(process.env.IDLEHANDS_RESPONSE_TIMEOUT),
     connection_timeout: parseNum(process.env.IDLEHANDS_CONNECTION_TIMEOUT),
+    initial_connection_check: parseBool(process.env.IDLEHANDS_INITIAL_CONNECTION_CHECK),
+    initial_connection_timeout: parseNum(process.env.IDLEHANDS_INITIAL_CONNECTION_TIMEOUT),
     approval_mode: process.env.IDLEHANDS_APPROVAL_MODE as any,
     no_confirm: parseBool(process.env.IDLEHANDS_NO_CONFIRM),
     verbose: parseBool(process.env.IDLEHANDS_VERBOSE),
@@ -239,6 +244,7 @@ export async function loadConfig(opts: {
       strict: parseBool(process.env.IDLEHANDS_HOOKS_STRICT),
       plugin_paths: parseCsv(process.env.IDLEHANDS_HOOK_PLUGIN_PATHS),
       warn_ms: parseNum(process.env.IDLEHANDS_HOOK_WARN_MS),
+      allow_capabilities: parseCsv(process.env.IDLEHANDS_HOOK_ALLOW_CAPABILITIES) as any,
     },
     auto_update_check: parseBool(process.env.IDLEHANDS_AUTO_UPDATE_CHECK),
     offline: parseBool(process.env.IDLEHANDS_OFFLINE),
@@ -422,6 +428,21 @@ export async function loadConfig(opts: {
   if (typeof merged.hooks.warn_ms === 'number') {
     merged.hooks.warn_ms = Math.max(0, Math.floor(merged.hooks.warn_ms));
   }
+  const allowedHookCapabilities = new Set([
+    'observe',
+    'read_prompts',
+    'read_responses',
+    'read_tool_args',
+    'read_tool_results',
+  ]);
+  merged.hooks.allow_capabilities = Array.isArray(merged.hooks.allow_capabilities)
+    ? merged.hooks.allow_capabilities
+        .map((x: any) => String(x).trim())
+        .filter((x: string) => allowedHookCapabilities.has(x))
+    : ['observe'];
+  if (merged.hooks.allow_capabilities.length === 0) {
+    merged.hooks.allow_capabilities = ['observe'];
+  }
 
   const subAgentsEnabled = parseBoolLike(merged.sub_agents.enabled);
   if (subAgentsEnabled !== undefined) merged.sub_agents.enabled = subAgentsEnabled;
@@ -528,6 +549,11 @@ export async function loadConfig(opts: {
   }
   if (typeof merged.connection_timeout === 'number') {
     merged.connection_timeout = Math.max(1, Math.floor(merged.connection_timeout));
+  }
+  const initialConnCheck = parseBoolLike(merged.initial_connection_check);
+  if (initialConnCheck !== undefined) merged.initial_connection_check = initialConnCheck;
+  if (typeof merged.initial_connection_timeout === 'number') {
+    merged.initial_connection_timeout = Math.max(1, Math.floor(merged.initial_connection_timeout));
   }
   if (typeof merged.temperature === 'number') {
     merged.temperature = Math.max(0, Math.min(2, merged.temperature));

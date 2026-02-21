@@ -27,7 +27,7 @@ idlehands setup
 - `mcp_tool_budget`, `mcp_call_timeout_sec`
 - `watchdog_timeout_ms`, `watchdog_max_compactions`, `watchdog_idle_grace_timeouts`
 - `debug_abort_reason`
-- `hooks.enabled`, `hooks.strict`, `hooks.warn_ms`, `hooks.plugin_paths`
+- `hooks.enabled`, `hooks.strict`, `hooks.warn_ms`, `hooks.allow_capabilities`, `hooks.plugin_paths`
 
 ## Structured sections
 
@@ -91,6 +91,7 @@ list entirely. The model works in single-agent mode.
   "enabled": true,
   "strict": false,
   "warn_ms": 250,
+  "allow_capabilities": ["observe"],
   "plugin_paths": [
     "./dist/hooks/plugins/example-console.js"
   ]

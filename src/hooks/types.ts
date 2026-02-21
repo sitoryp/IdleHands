@@ -1,5 +1,15 @@
 import type { ToolCallEvent, ToolResultEvent, TurnEndEvent } from '../types.js';
 
+export const HOOK_CAPABILITIES = [
+  'observe',
+  'read_prompts',
+  'read_responses',
+  'read_tool_args',
+  'read_tool_results',
+] as const;
+
+export type HookCapability = (typeof HOOK_CAPABILITIES)[number];
+
 export type HookEventMap = {
   session_start: {
     model: string;
@@ -65,6 +75,8 @@ export type HookHandler<E extends HookEventName = HookEventName> = (
 
 export type HookPlugin = {
   name?: string;
+  /** Requested capabilities. Default: ['observe'] */
+  capabilities?: HookCapability[];
   hooks?: Partial<{ [K in HookEventName]: HookHandler<K> | HookHandler<K>[] }>;
   setup?: (api: HookRegistrationApi) => void | Promise<void>;
 };
@@ -79,6 +91,32 @@ export type HookSystemConfig = {
   strict?: boolean;
   plugin_paths?: string[];
   warn_ms?: number;
+  /** Allowed plugin capabilities. Default: ['observe'] */
+  allow_capabilities?: HookCapability[];
 };
 
 export type HookLog = (message: string) => void;
+
+export type HookPluginInfo = {
+  source: string;
+  name: string;
+  requestedCapabilities: HookCapability[];
+  grantedCapabilities: HookCapability[];
+  deniedCapabilities: HookCapability[];
+};
+
+export type HookHandlerInfo = {
+  source: string;
+  event: HookEventName;
+};
+
+export type HookStatsSnapshot = {
+  enabled: boolean;
+  strict: boolean;
+  allowedCapabilities: HookCapability[];
+  plugins: HookPluginInfo[];
+  handlers: HookHandlerInfo[];
+  eventCounts: Partial<Record<HookEventName, number>>;
+  recentErrors: string[];
+  recentSlowHandlers: string[];
+};

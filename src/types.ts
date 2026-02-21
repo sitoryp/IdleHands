@@ -143,6 +143,7 @@ export type HookSystemConfig = {
   strict?: boolean;
   plugin_paths?: string[];
   warn_ms?: number;
+  allow_capabilities?: Array<'observe' | 'read_prompts' | 'read_responses' | 'read_tool_args' | 'read_tool_results'>;
 };
 
 export type IdlehandsConfig = {
@@ -160,8 +161,10 @@ export type IdlehandsConfig = {
   max_iterations: number;
 
   // network
-  response_timeout: number;   // seconds to wait for model server responses (default 600)
+  response_timeout: number;    // seconds to wait for model server responses (default 600)
   connection_timeout?: number; // seconds to wait for initial HTTP connection/headers (default follows response_timeout)
+  initial_connection_check?: boolean; // run one-time fast probe before first ask (default true)
+  initial_connection_timeout?: number; // seconds for initial probe timeout (default 10)
 
   // safety + UX
   approval_mode: ApprovalMode;

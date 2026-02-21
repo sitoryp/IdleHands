@@ -19,6 +19,8 @@ describe('config resolution: CLI > env > file > defaults', () => {
     'IDLEHANDS_TIMEOUT',
     'IDLEHANDS_RESPONSE_TIMEOUT',
     'IDLEHANDS_CONNECTION_TIMEOUT',
+    'IDLEHANDS_INITIAL_CONNECTION_CHECK',
+    'IDLEHANDS_INITIAL_CONNECTION_TIMEOUT',
     'IDLEHANDS_NO_CONFIRM',
     'IDLEHANDS_VERBOSE',
     'IDLEHANDS_APPROVAL_MODE',
@@ -46,7 +48,8 @@ describe('config resolution: CLI > env > file > defaults', () => {
     'IDLEHANDS_HOOKS_ENABLED',
     'IDLEHANDS_HOOKS_STRICT',
     'IDLEHANDS_HOOK_PLUGIN_PATHS',
-    'IDLEHANDS_HOOK_WARN_MS'
+    'IDLEHANDS_HOOK_WARN_MS',
+    'IDLEHANDS_HOOK_ALLOW_CAPABILITIES'
   ];
 
   before(async () => {
@@ -77,6 +80,10 @@ describe('config resolution: CLI > env > file > defaults', () => {
     assert.equal(config.mode, 'code');
     assert.equal(config.no_confirm, false);
     assert.equal(config.verbose, false);
+    assert.equal(config.response_timeout, 600);
+    assert.equal(config.connection_timeout, 600);
+    assert.equal(config.initial_connection_check, true);
+    assert.equal(config.initial_connection_timeout, 10);
   });
 
   it('file config overrides defaults', async () => {
@@ -457,11 +464,25 @@ describe('config resolution: CLI > env > file > defaults', () => {
     }
   });
 
+  it('parses initial connection check options from env', async () => {
+    process.env.IDLEHANDS_INITIAL_CONNECTION_CHECK = '0';
+    process.env.IDLEHANDS_INITIAL_CONNECTION_TIMEOUT = '7';
+    try {
+      const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
+      assert.equal(config.initial_connection_check, false);
+      assert.equal(config.initial_connection_timeout, 7);
+    } finally {
+      delete process.env.IDLEHANDS_INITIAL_CONNECTION_CHECK;
+      delete process.env.IDLEHANDS_INITIAL_CONNECTION_TIMEOUT;
+    }
+  });
+
   it('parses hook system settings from env', async () => {
     process.env.IDLEHANDS_HOOKS_ENABLED = '1';
     process.env.IDLEHANDS_HOOKS_STRICT = '1';
     process.env.IDLEHANDS_HOOK_PLUGIN_PATHS = './dist/hooks/plugins/example-console.js, ./plugins/custom.js';
     process.env.IDLEHANDS_HOOK_WARN_MS = '500';
+    process.env.IDLEHANDS_HOOK_ALLOW_CAPABILITIES = 'observe,read_prompts,read_tool_args,invalid_cap';
 
     try {
       const { config } = await loadConfig({ configPath: path.join(tmpDir, 'nonexistent.json') });
@@ -472,11 +493,13 @@ describe('config resolution: CLI > env > file > defaults', () => {
         './plugins/custom.js',
       ]);
       assert.equal(config.hooks?.warn_ms, 500);
+      assert.deepEqual(config.hooks?.allow_capabilities, ['observe', 'read_prompts', 'read_tool_args']);
     } finally {
       delete process.env.IDLEHANDS_HOOKS_ENABLED;
       delete process.env.IDLEHANDS_HOOKS_STRICT;
       delete process.env.IDLEHANDS_HOOK_PLUGIN_PATHS;
       delete process.env.IDLEHANDS_HOOK_WARN_MS;
+      delete process.env.IDLEHANDS_HOOK_ALLOW_CAPABILITIES;
     }
   });
 

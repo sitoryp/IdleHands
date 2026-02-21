@@ -29,6 +29,13 @@ All hook handlers receive:
     "enabled": true,
     "strict": false,
     "warn_ms": 250,
+    "allow_capabilities": [
+      "observe",
+      "read_prompts",
+      "read_responses",
+      "read_tool_args",
+      "read_tool_results"
+    ],
     "plugin_paths": [
       "./dist/hooks/plugins/example-console.js",
       "./plugins/my-hook.js"
@@ -43,6 +50,7 @@ All hook handlers receive:
 - `IDLEHANDS_HOOKS_STRICT`
 - `IDLEHANDS_HOOK_PLUGIN_PATHS` (comma-separated)
 - `IDLEHANDS_HOOK_WARN_MS`
+- `IDLEHANDS_HOOK_ALLOW_CAPABILITIES` (comma-separated)
 
 ## Plugin format
 
@@ -73,11 +81,28 @@ const plugin = {
 export default plugin
 ```
 
+## Capability sandbox
+
+Plugin capabilities are default-deny.
+
+- Global allowlist is controlled by `hooks.allow_capabilities`.
+- Each plugin can request capabilities via `plugin.capabilities`.
+- Granted capabilities = intersection of requested + allowed.
+- Missing capabilities are redacted in payloads (instead of exposing raw data).
+
+Capabilities:
+- `observe`
+- `read_prompts`
+- `read_responses`
+- `read_tool_args`
+- `read_tool_results`
+
 ## Safety model
 
 - Non-strict mode (`strict: false`) isolates plugin failures and logs warnings.
 - Strict mode (`strict: true`) treats plugin failure as fatal for that operation.
 - Slow hook handlers emit warnings when runtime exceeds `warn_ms`.
+- TUI/CLI hook inspector: `/hooks [status|errors|slow|plugins]`.
 
 ## Recommended usage
 

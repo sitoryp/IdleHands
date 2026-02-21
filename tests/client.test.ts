@@ -21,6 +21,25 @@ describe('OpenAIClient retry behavior', () => {
     assert.equal(client.defaultConnectionTimeoutMs, 1_200_000, 'explicit connection timeout should remain pinned');
   });
 
+  it('runs initial connection probe once and supports fast probe timeout', async () => {
+    const client: any = new OpenAIClient('http://example.invalid/v1', undefined, false);
+    client.setInitialConnectionProbeTimeout(1);
+
+    let calls = 0;
+    const orig = client.fetchWithConnTimeout.bind(client);
+    client.fetchWithConnTimeout = async (...args: any[]) => {
+      calls += 1;
+      return { ok: true, status: 200, text: async () => 'ok' } as any;
+    };
+
+    await client.probeConnection();
+    await client.probeConnection();
+
+    assert.equal(calls, 1, 'probe should run only once after first successful check');
+
+    client.fetchWithConnTimeout = orig;
+  });
+
   it('retries once on connection timeout (non-streaming chat)', async () => {
     const client: any = new OpenAIClient('http://example.invalid/v1', undefined, false);
 

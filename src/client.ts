@@ -159,6 +159,11 @@ export class OpenAIClient {
   /** True when connection timeout was explicitly set by caller/config. */
   private explicitConnectionTimeout = false;
 
+  /** Optional one-time preflight connectivity check before first model call. */
+  private initialConnectionCheckEnabled = true;
+  private initialConnectionProbeTimeoutMs = 10_000;
+  private initialConnectionProbeComplete = false;
+
   /**
    * When true, tools/tool_choice are stripped from API requests.
    * Tool descriptions are injected into the system prompt instead,
@@ -257,6 +262,40 @@ export class OpenAIClient {
     if (Number.isFinite(seconds) && seconds > 0) {
       this.defaultConnectionTimeoutMs = seconds * 1000;
       this.explicitConnectionTimeout = true;
+    }
+  }
+
+  /** Enable/disable initial connectivity preflight before first ask. */
+  setInitialConnectionCheck(enabled: boolean): void {
+    this.initialConnectionCheckEnabled = enabled === true;
+  }
+
+  /** Set timeout (in seconds) for initial connectivity preflight. */
+  setInitialConnectionProbeTimeout(seconds: number): void {
+    if (Number.isFinite(seconds) && seconds > 0) {
+      this.initialConnectionProbeTimeoutMs = seconds * 1000;
+    }
+  }
+
+  /** Run one-time connectivity probe against /models to fail fast on unreachable endpoints. */
+  async probeConnection(signal?: AbortSignal): Promise<void> {
+    if (!this.initialConnectionCheckEnabled || this.initialConnectionProbeComplete) return;
+
+    const url = `${this.endpoint}/models`;
+    try {
+      await this.fetchWithConnTimeout(url, {
+        method: 'GET',
+        headers: this.headers(),
+        signal,
+      }, this.initialConnectionProbeTimeoutMs);
+      this.initialConnectionProbeComplete = true;
+    } catch (e: any) {
+      if (signal?.aborted) throw e;
+      throw makeClientError(
+        `Initial connection check failed (${this.initialConnectionProbeTimeoutMs}ms) to ${url}: ${e?.message ?? String(e)}`,
+        undefined,
+        true,
+      );
     }
   }
 
