@@ -91,6 +91,7 @@ export interface TuiState {
   transcript: TranscriptItem[];
   toolEvents: ToolEvent[];
   alerts: AlertItem[];
+  statusText?: string;
   activeRuntime: ActiveRuntimeView | null;
   isStreaming: boolean;
   streamTargetId?: string;

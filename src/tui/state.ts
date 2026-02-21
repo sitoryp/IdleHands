@@ -16,6 +16,7 @@ export function createInitialTuiState(): TuiState {
     transcript: [],
     toolEvents: [],
     alerts: [],
+    statusText: undefined,
     activeRuntime: null,
     isStreaming: false,
     streamTargetId: undefined,
@@ -133,6 +134,16 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
     case "TOOL_ERROR":
       return { ...state, toolEvents: [...state.toolEvents, { id: ev.id, name: ev.name, phase: "error", ts: Date.now(), detail: ev.detail, summary: ev.summary, durationMs: ev.durationMs }] };
 
+    case "TOOL_TAIL": {
+      const idxFromEnd = [...state.toolEvents].reverse().findIndex(
+        (e) => e.id === ev.id && e.phase === 'start',
+      );
+      if (idxFromEnd < 0) return state;
+      const idx = state.toolEvents.length - 1 - idxFromEnd;
+      const toolEvents = state.toolEvents.map((t, i) => (i === idx ? { ...t, detail: ev.tail } : t));
+      return { ...state, toolEvents };
+    }
+
     case "RUNTIME_STATE_UPDATE":
       return { ...state, activeRuntime: ev.runtime };
 
@@ -141,6 +152,12 @@ export function reduceTuiState(state: TuiState, ev: TuiEvent): TuiState {
 
     case "ALERT_CLEAR":
       return { ...state, alerts: ev.id ? state.alerts.filter((a) => a.id !== ev.id) : [] };
+
+    case "STATUS_SET":
+      return { ...state, statusText: ev.text };
+
+    case "STATUS_CLEAR":
+      return { ...state, statusText: undefined };
 
     case "CONFIRM_SHOW":
       return {

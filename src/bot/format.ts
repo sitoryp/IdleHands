@@ -3,6 +3,7 @@
  * Lightweight, no external deps. Handles the subset Telegram supports.
  */
 
+import { formatToolCallSummary as formatSharedToolCallSummary } from '../progress/tool-summary.js';
 
 /**
  * Remove accidental tool-protocol leakage from model text before rendering to chat.
@@ -221,29 +222,5 @@ export function splitMessage(text: string, maxLen = 4096): string[] {
 
 /** Format a tool call into a one-line summary for display. */
 export function formatToolCallSummary(call: { name: string; args: Record<string, unknown> }): string {
-  const { name, args } = call;
-  switch (name) {
-    case 'read_file':
-      return `read_file ${args.path || '?'}${args.search ? ` (search: ${args.search})` : ''}`;
-    case 'read_files':
-      return `read_files (${Array.isArray(args.requests) ? args.requests.length : '?'} files)`;
-    case 'write_file':
-      return `write_file ${args.path || '?'}`;
-    case 'edit_file':
-      return `edit_file ${args.path || '?'}`;
-    case 'insert_file':
-      return `insert_file ${args.path || '?'} (line ${args.line ?? '?'})`;
-    case 'list_dir':
-      return `list_dir ${args.path || '.'}${args.recursive ? ' (recursive)' : ''}`;
-    case 'search_files':
-      return `search_files "${args.pattern || '?'}" in ${args.path || '.'}`;
-    case 'exec': {
-      const cmd = String(args.command || '?');
-      return `exec: ${cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd}`;
-    }
-    case 'vault_search':
-      return `vault_search "${args.query || '?'}"`;
-    default:
-      return name;
-  }
+  return formatSharedToolCallSummary(call as any);
 }

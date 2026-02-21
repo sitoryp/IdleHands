@@ -17,9 +17,12 @@ export type TuiEvent =
   | { type: "TOOL_START"; id: string; name: string; summary?: string; detail?: string; durationMs?: number }
   | { type: "TOOL_END"; id: string; name: string; summary?: string; detail?: string; durationMs?: number }
   | { type: "TOOL_ERROR"; id: string; name: string; summary?: string; detail?: string; durationMs?: number }
+  | { type: "TOOL_TAIL"; id: string; tail: string }
   | { type: "RUNTIME_STATE_UPDATE"; runtime: ActiveRuntimeView | null }
   | { type: "ALERT_PUSH"; id: string; level: "info" | "warn" | "error"; text: string }
   | { type: "ALERT_CLEAR"; id?: string }
+  | { type: "STATUS_SET"; text: string }
+  | { type: "STATUS_CLEAR" }
   | { type: "CONFIRM_SHOW"; tool: string; summary: string; args?: Record<string, unknown>; diff?: string }
   | { type: "CONFIRM_TOGGLE_DIFF" }
   | { type: "CONFIRM_DISMISS" }

@@ -75,6 +75,12 @@ function redactPayload<E extends HookEventName>(
     }
   }
 
+  if (event === 'tool_stream' && !caps.has('read_tool_results')) {
+    if (out.stream && typeof out.stream === 'object') {
+      out.stream.chunk = '[redacted: missing read_tool_results capability]';
+    }
+  }
+
   return out;
 }
 

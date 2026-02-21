@@ -4,7 +4,7 @@
  */
 
 import { Bot, InputFile } from 'grammy';
-import type { IdlehandsConfig, BotTelegramConfig, ToolCallEvent, ToolResultEvent, ModelEscalation } from '../types.js';
+import type { IdlehandsConfig, BotTelegramConfig, ToolCallEvent, ToolResultEvent, ToolStreamEvent, TurnEndEvent, ModelEscalation } from '../types.js';
 import type { AgentHooks } from '../agent.js';
 import { SessionManager, type ManagedSession } from './session-manager.js';
 import { markdownToTelegramHtml, splitMessage, escapeHtml, formatToolCallSummary } from './format.js';
@@ -16,6 +16,8 @@ import {
 } from './commands.js';
 import { TelegramConfirmProvider } from './confirm-telegram.js';
 import { formatWatchdogCancelMessage, resolveWatchdogSettings } from '../watchdog.js';
+import { TurnProgressController } from '../progress/turn-progress.js';
+import { ToolTailBuffer } from '../progress/tool-tail.js';
 
 // ---------------------------------------------------------------------------
 // Escalation helpers (mirrored from discord.ts)
@@ -152,13 +154,28 @@ class StreamingMessage {
   private finalized = false;
   private backoffMs = 0;
 
+  private statusLine = '⏳ Thinking...';
+  private progress: TurnProgressController;
+  private tails = new ToolTailBuffer({ maxChars: 4096, maxLines: 4 });
+  private activeToolId: string | null = null;
+
   constructor(
     private bot: Bot,
     private chatId: number,
     private editIntervalMs: number,
     private replyToId?: number,
     private fileThresholdChars: number = 8192
-  ) {}
+  ) {
+    this.progress = new TurnProgressController(
+      (snap) => { this.statusLine = snap.statusLine; },
+      {
+        heartbeatMs: 1000,
+        bucketMs: 5000,
+        maxToolLines: 8,
+        toolCallSummary: (c) => formatToolCallSummary(c as any),
+      }
+    );
+  }
 
   async init(): Promise<void> {
     // Show "typing..." indicator immediately; repeat every 4s (Telegram auto-expires at ~5s)
@@ -173,6 +190,7 @@ class StreamingMessage {
       reply_to_message_id: this.replyToId,
     });
     this.messageId = msg.message_id;
+    this.progress.start();
     this.startEditLoop();
   }
 
@@ -185,9 +203,15 @@ class StreamingMessage {
 
   onToken(token: string): void {
     this.buffer += token;
+    this.progress.hooks.onToken?.(token);
   }
 
   onToolCall(call: ToolCallEvent): void {
+    this.progress.hooks.onToolCall?.(call);
+
+    this.activeToolId = call.id;
+    this.tails.reset(call.id, call.name);
+
     const summary = formatToolCallSummary(call);
     const line = `◆ ${summary}...`;
     if (this.lastToolLine === line && this.toolLines.length > 0) {
@@ -200,13 +224,29 @@ class StreamingMessage {
     this.toolLines.push(line);
   }
 
+  onToolStream(ev: ToolStreamEvent): void {
+    if (!this.activeToolId || ev.id !== this.activeToolId) return;
+    this.tails.push(ev);
+  }
+
   onToolResult(result: ToolResultEvent): void {
+    this.progress.hooks.onToolResult?.(result);
+
     this.lastToolLine = "";
     this.lastToolRepeat = 0;
     if (this.toolLines.length > 0) {
       const icon = result.success ? '✓' : '✗';
       this.toolLines[this.toolLines.length - 1] = `${icon} ${result.name}: ${result.summary}`;
     }
+
+    if (this.activeToolId === result.id) {
+      this.tails.clear(result.id);
+      this.activeToolId = null;
+    }
+  }
+
+  onTurnEnd(stats: TurnEndEvent): void {
+    this.progress.hooks.onTurnEnd?.(stats);
   }
 
   private startEditLoop(): void {
@@ -240,16 +280,24 @@ class StreamingMessage {
   }
 
   private render(): string {
-    let out = '';
+    let out = `<i>${escapeHtml(this.statusLine)}</i>`;
+
     if (this.toolLines.length) {
-      out += `<pre>${escapeHtml(this.toolLines.join('\n'))}</pre>\n\n`;
+      out += `\n\n<pre>${escapeHtml(this.toolLines.join('\n'))}</pre>`;
     }
+
+    if (this.activeToolId) {
+      const tail = this.tails.get(this.activeToolId);
+      if (tail?.lines?.length) {
+        const label = tail.stream === 'stderr' ? 'stderr' : 'stdout';
+        out += `\n\n<b>↳ ${escapeHtml(label)} tail</b>\n<pre>${escapeHtml(tail.lines.join('\n'))}</pre>`;
+      }
+    }
+
     if (this.buffer) {
-      out += markdownToTelegramHtml(this.buffer);
+      out += `\n\n${markdownToTelegramHtml(this.buffer)}`;
     }
-    if (!out.trim()) {
-      out = '⏳ Thinking...';
-    }
+
     return out.slice(0, 4096);
   }
 
@@ -261,6 +309,7 @@ class StreamingMessage {
       clearInterval(this.editTimer);
       this.editTimer = null;
     }
+    this.progress.stop();
 
     const html = this.renderFinal(text);
 
@@ -335,6 +384,7 @@ class StreamingMessage {
       clearInterval(this.editTimer);
       this.editTimer = null;
     }
+    this.progress.stop();
 
     let html = '';
     if (this.toolLines.length) {
@@ -979,16 +1029,23 @@ async function processMessage(
       watchdogGraceUsed = 0;
       streaming.onToolCall(call);
     },
+    onToolStream: (ev) => {
+      if (!sessions.isTurnActive(managed.chatId, turnId)) return;
+      sessions.markProgress(managed.chatId, turnId);
+      watchdogGraceUsed = 0;
+      streaming.onToolStream(ev);
+    },
     onToolResult: (result) => {
       if (!sessions.isTurnActive(managed.chatId, turnId)) return;
       sessions.markProgress(managed.chatId, turnId);
       watchdogGraceUsed = 0;
       streaming.onToolResult(result);
     },
-    onTurnEnd: () => {
+    onTurnEnd: (stats) => {
       if (!sessions.isTurnActive(managed.chatId, turnId)) return;
       sessions.markProgress(managed.chatId, turnId);
       watchdogGraceUsed = 0;
+      streaming.onTurnEnd(stats);
     },
   };
 

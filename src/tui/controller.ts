@@ -1,4 +1,4 @@
-import { createSession, type AgentSession } from "../agent.js";
+import { createSession, type AgentSession, type AgentHooks } from "../agent.js";
 import type { IdlehandsConfig } from "../types.js";
 import type { TranscriptItem } from "./types.js";
 import { decodeRawInput, resolveAction } from "./keymap.js";
@@ -14,6 +14,10 @@ import { formatWatchdogCancelMessage, resolveWatchdogSettings } from "../watchdo
 import type { SettingsMenuItem, StepNavigatorItem } from "./types.js";
 import { TuiConfirmProvider } from "./confirm.js";
 import { splitTokens } from '../cli/command-utils.js';
+import { TurnProgressController } from '../progress/turn-progress.js';
+import { chainAgentHooks } from '../progress/agent-hooks.js';
+import { formatToolCallSummary } from '../progress/tool-summary.js';
+import { ToolTailBuffer } from '../progress/tool-tail.js';
 
 const THEME_OPTIONS = ['default', 'dark', 'light', 'minimal', 'hacker'] as const;
 const APPROVAL_OPTIONS = ['plan', 'default', 'auto-edit', 'yolo'] as const;
@@ -512,6 +516,22 @@ export class TuiController {
       }
     }, 5_000);
 
+    const progress = new TurnProgressController(
+      (snap) => {
+        this.dispatch({ type: 'STATUS_SET', text: snap.statusLine });
+      },
+      {
+        heartbeatMs: 1000,
+        bucketMs: 5000,
+        maxToolLines: 0,
+        toolCallSummary: (c) => formatToolCallSummary({ name: c.name, args: c.args as any }),
+      },
+    );
+    const tails = new ToolTailBuffer({ maxChars: 4096, maxLines: 4 });
+    let activeToolId: string | null = null;
+
+    progress.start();
+
     try {
       let askComplete = false;
       let isRetryAfterCompaction = false;
@@ -523,36 +543,59 @@ export class TuiController {
           ? 'Continue working on the task from where you left off. Context was compacted to free memory — do NOT restart from the beginning.'
           : trimmed;
 
+        const uiHooks: AgentHooks = {
+          signal: attemptController.signal,
+          onToken: (t) => {
+            this.lastProgressAt = Date.now();
+            watchdogGraceUsed = 0;
+            this.dispatch({ type: 'AGENT_STREAM_TOKEN', id, token: t });
+          },
+          onToolCall: (c) => {
+            this.lastProgressAt = Date.now();
+            watchdogGraceUsed = 0;
+
+            activeToolId = c.id;
+            tails.reset(c.id, c.name);
+            this.dispatch({
+              type: 'TOOL_START',
+              id: c.id,
+              name: c.name,
+              detail: formatToolCallSummary({ name: c.name, args: c.args as any }),
+            });
+          },
+          onToolStream: (ev) => {
+            if (!activeToolId || ev.id !== activeToolId) return;
+            const snap = tails.push(ev);
+            const last = snap?.lines?.[snap.lines.length - 1];
+            if (last) this.dispatch({ type: 'TOOL_TAIL', id: ev.id, tail: last });
+          },
+          onToolResult: (r) => {
+            this.lastProgressAt = Date.now();
+            watchdogGraceUsed = 0;
+
+            if (activeToolId === r.id) {
+              activeToolId = null;
+              tails.clear(r.id);
+            }
+            this.dispatch({ type: r.success ? 'TOOL_END' : 'TOOL_ERROR', id: r.id, name: r.name, detail: r.summary });
+          },
+          onTurnEnd: () => {
+            this.lastProgressAt = Date.now();
+            watchdogGraceUsed = 0;
+          },
+        };
+
+        const hooks = chainAgentHooks(uiHooks, progress.hooks);
+
         try {
-          await this.session.ask(askText, {
-            signal: attemptController.signal,
-            onToken: (t) => {
-              this.lastProgressAt = Date.now();
-              watchdogGraceUsed = 0;
-              this.dispatch({ type: "AGENT_STREAM_TOKEN", id, token: t });
-            },
-            onToolCall: (c) => {
-              this.lastProgressAt = Date.now();
-              watchdogGraceUsed = 0;
-              this.dispatch({ type: "TOOL_START", id: `${c.name}-${Date.now()}`, name: c.name, detail: JSON.stringify(c.args).slice(0, 120) });
-            },
-            onToolResult: async (r) => {
-              this.lastProgressAt = Date.now();
-              watchdogGraceUsed = 0;
-              this.dispatch({ type: r.success ? "TOOL_END" : "TOOL_ERROR", id: `${r.name}-${Date.now()}`, name: r.name, detail: r.summary });
-            },
-            onTurnEnd: () => {
-              this.lastProgressAt = Date.now();
-              watchdogGraceUsed = 0;
-            },
-          });
+          await this.session.ask(askText, hooks);
           askComplete = true;
         } catch (e: any) {
           const msg = e?.message ?? String(e);
           const isAbort = msg.includes('AbortError') || msg.toLowerCase().includes('aborted');
 
           if (isAbort && watchdogCompactPending) {
-            this.dispatch({ type: "ALERT_PUSH", id: `compact_${Date.now()}`, level: "info", text: `Context too large — compacting and retrying (attempt ${this.watchdogCompactAttempts}/${maxWatchdogCompacts})...` });
+            this.dispatch({ type: 'ALERT_PUSH', id: `compact_${Date.now()}`, level: 'info', text: `Context too large — compacting and retrying (attempt ${this.watchdogCompactAttempts}/${maxWatchdogCompacts})...` });
             while (watchdogCompactPending) {
               await new Promise((r) => setTimeout(r, 500));
             }
@@ -568,15 +611,17 @@ export class TuiController {
               debugAbortReason,
               abortReason: msg,
             });
-            this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text });
+            this.dispatch({ type: 'ALERT_PUSH', id: `err_${Date.now()}`, level: 'error', text });
           } else {
-            this.dispatch({ type: "ALERT_PUSH", id: `err_${Date.now()}`, level: "error", text: msg });
+            this.dispatch({ type: 'ALERT_PUSH', id: `err_${Date.now()}`, level: 'error', text: msg });
           }
         }
       }
     } finally {
+      progress.stop();
+      this.dispatch({ type: 'STATUS_CLEAR' });
       clearInterval(watchdog);
-      this.dispatch({ type: "AGENT_STREAM_DONE", id });
+      this.dispatch({ type: 'AGENT_STREAM_DONE', id });
       this.inFlight = false;
       this.aborter = null;
     }
