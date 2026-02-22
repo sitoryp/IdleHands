@@ -56,8 +56,15 @@ export const sessionCommands: SlashCommand[] = [
     },
   },
   {
+    name: '/version',
+    description: 'Show version only',
+    async execute(ctx) {
+      console.log(ctx.version);
+      return true;
+    },
+  },
+  {
     name: '/status',
-    description: 'Show context usage',
     async execute(ctx) {
       ctx.lastStatusLine = formatStatusLine(ctx.session, ctx.config, ctx.S);
       console.log(ctx.lastStatusLine);

@@ -23,10 +23,8 @@ import {
   sessionKeyForMessage,
 } from './discord-routing.js';
 import { firstToken } from '../cli/command-utils.js';
-import { projectDir } from '../utils.js';
+import { projectDir, PKG_VERSION } from '../utils.js';
 import { WATCHDOG_RECOMMENDED_TUNING_TEXT, formatWatchdogCancelMessage, resolveWatchdogSettings, shouldRecommendWatchdogTuning } from '../watchdog.js';
-import path from 'node:path';
-import fs from 'node:fs/promises';
 import { detectRepoCandidates, expandHome, isPathAllowed, normalizeAllowedDirs } from './dir-guard.js';
 import { runAnton } from '../anton/controller.js';
 import { parseTaskFile } from '../anton/parser.js';
@@ -747,6 +745,7 @@ When you escalate, your request will be re-run on a more capable model.`;
           '**IdleHands Commands**',
           '',
           '/help — This message',
+          '/version — Show version',
           '/new — Start fresh session',
           '/status — Session stats',
           '/watchdog — Show watchdog settings/status',
@@ -754,6 +753,16 @@ When you escalate, your request will be re-run on a more capable model.`;
           '/agents — List all configured agents',
           '/cancel — Abort running task',
           '/reset — Full session reset',
+        ];
+        await interaction.reply(lines.join('\n'));
+        break;
+      }
+      case 'version': {
+        const lines = [
+          `**IdleHands** v${PKG_VERSION}`,
+          '',
+          `**Model:** \`${botConfig.model || 'auto'}\``,
+          `**Endpoint:** \`${botConfig.endpoint || '?'}\``,
         ];
         await interaction.reply(lines.join('\n'));
         break;

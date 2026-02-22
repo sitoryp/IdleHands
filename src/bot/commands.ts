@@ -29,6 +29,16 @@ type CommandContext = {
   };
 };
 
+export async function handleVersion({ ctx, botConfig }: CommandContext): Promise<void> {
+  const lines = [
+    `<b>Idle Hands</b> v${botConfig.version || "unknown"}`,
+    "",
+    `<b>Model:</b> <code>${escapeHtml(botConfig.model || "auto")}</code>`,
+    `<b>Endpoint:</b> <code>${escapeHtml(botConfig.endpoint || "?")}</code>`,
+  ];
+  await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+}
+
 export async function handleStart({ ctx, botConfig }: CommandContext): Promise<void> {
   const lines = [
     '<b>🔧 Idle Hands</b> — Local-first coding agent',

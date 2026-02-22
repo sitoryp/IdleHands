@@ -10,8 +10,9 @@ import { SessionManager, type ManagedSession } from './session-manager.js';
 import { markdownToTelegramHtml, splitMessage, escapeHtml, formatToolCallSummary } from './format.js';
 import { ProgressPresenter } from '../progress/progress-presenter.js';
 import { MessageEditScheduler, classifyTelegramEditError } from '../progress/message-edit-scheduler.js';
+import { PKG_VERSION } from '../utils.js';
 import {
-  handleStart, handleHelp, handleNew, handleCancel,
+  handleStart, handleHelp, handleVersion, handleNew, handleCancel,
   handleStatus, handleWatchdog, handleDir, handleModel, handleCompact,
   handleApproval, handleMode, handleSubAgents, handleChanges, handleUndo, handleVault,
   handleAnton, handleAgent, handleAgents, handleEscalate, handleDeescalate,
@@ -408,6 +409,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
     botConfig: {
       model: config.model,
       endpoint: config.endpoint,
+      version: PKG_VERSION,
       defaultDir: botConfig.default_dir || config.dir,
       telegram: botConfig,
       watchdog: {
@@ -448,6 +450,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
 
   bot.command('start', (ctx) => handleStart(cmdCtx(ctx)));
   bot.command('help', (ctx) => handleHelp(cmdCtx(ctx)));
+  bot.command('version', (ctx) => handleVersion(cmdCtx(ctx)));
   bot.command('new', (ctx) => handleNew(cmdCtx(ctx)));
   bot.command('cancel', (ctx) => handleCancel(cmdCtx(ctx)));
   bot.command('status', (ctx) => handleStatus(cmdCtx(ctx)));
