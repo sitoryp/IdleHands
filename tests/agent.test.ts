@@ -911,6 +911,61 @@ describe('harness behavioral wiring', () => {
     }
   });
 
+  it('reuses cached output for repeated identical read_file calls instead of hard-breaking', async () => {
+    const work = await fs.mkdtemp(path.join(os.tmpdir(), 'idlehands-read-cache-'));
+    await fs.writeFile(path.join(work, 'repeat.txt'), 'line1\nline2\nline3\n', 'utf8');
+
+    let calls = 0;
+    const fakeClient: any = {
+      async models() { return { data: [{ id: 'fake-model' }] }; },
+      async warmup() {},
+      async chatStream() {
+        calls++;
+        if (calls <= 7) {
+          return {
+            id: `fake-${calls}`,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                tool_calls: [{
+                  id: `tool-${calls}`,
+                  type: 'function',
+                  function: { name: 'read_file', arguments: JSON.stringify({ path: 'repeat.txt', limit: 50 }) }
+                }]
+              }
+            }],
+            usage: { prompt_tokens: 40, completion_tokens: 8 }
+          };
+        }
+
+        return {
+          id: `fake-${calls}`,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'done' } }],
+          usage: { prompt_tokens: 20, completion_tokens: 6 }
+        };
+      }
+    };
+
+    const config = baseConfig(work, { max_iterations: 12, context_window: 8192 });
+    const session = await createSession({ config, runtime: { client: fakeClient } });
+
+    try {
+      const out = await session.ask('read repeat file');
+      assert.equal(out.text, 'done');
+      assert.ok(calls >= 8, `expected loop to continue instead of hard-break; calls=${calls}`);
+
+      const sawCachedHint = session.messages.some((m: any) =>
+        m.role === 'tool' && typeof m.content === 'string' && m.content.includes('Reused cached output for repeated identical read call')
+      );
+      assert.equal(sawCachedHint, true, 'expected cached read hint in tool output');
+    } finally {
+      await session.close();
+      await fs.rm(work, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
   it('nemotron harness limits max_iterations via maxIterationsOverride', async () => {
     let calls = 0;
     const fakeClient: any = {

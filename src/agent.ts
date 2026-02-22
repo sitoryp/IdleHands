@@ -51,6 +51,7 @@ function makeAbortController() {
 }
 
 const CACHED_EXEC_OBSERVATION_HINT = '[idlehands hint] Reused cached output for repeated read-only exec call (unchanged observation).';
+const CACHED_READ_OBSERVATION_HINT = '[idlehands hint] Reused cached output for repeated identical read call.';
 
 function looksLikeReadOnlyExecCommand(command: string): boolean {
   const cmd = String(command || '').trim().toLowerCase();
@@ -126,6 +127,19 @@ function readOnlyExecCacheable(content: string): boolean {
   } catch {
     return false;
   }
+}
+
+function withCachedReadObservationHint(content: string): string {
+  if (!content) return CACHED_READ_OBSERVATION_HINT;
+  if (content.includes(CACHED_READ_OBSERVATION_HINT)) return content;
+
+  // Keep cached read replay lightweight to avoid re-inflating context.
+  const lines = String(content).split(/\r?\n/);
+  const previewLines = lines.slice(0, 12);
+  const omitted = Math.max(0, lines.length - previewLines.length);
+  const trailer = omitted > 0 ? `\n# ... (${omitted} more lines omitted; use previous identical read result)` : '';
+
+  return `${CACHED_READ_OBSERVATION_HINT}\n${previewLines.join('\n')}${trailer}`;
 }
 
 function ensureInformativeAssistantText(text: string, ctx: { toolCalls: number; turns: number }): string {
@@ -2250,6 +2264,9 @@ export async function createSession(opts: {
     const blockedExecAttemptsBySig = new Map<string, number>();
     // Cache successful read-only exec observations by exact signature.
     const execObservationCacheBySig = new Map<string, string>();
+    // Cache successful read_file/read_files/list_dir results by exact signature.
+    const readFileCacheBySig = new Map<string, string>();
+    const READ_FILE_CACHE_TOOLS = new Set(['read_file', 'read_files', 'list_dir']);
     // Prevent repeating the same "stop rerunning" reminder every turn.
     const readOnlyExecHintedSigs = new Set<string>();
     // Keep a lightweight breadcrumb for diagnostics on partial failures.
@@ -2765,6 +2782,8 @@ export async function createSession(opts: {
           // Repeated read-only exec calls can be served from cache instead of hard-breaking.
           const repeatedReadOnlyExecSigs = new Set<string>();
           const readOnlyExecTurnHints: string[] = [];
+          // Repeated read_file/read_files/list_dir calls can be served from cache.
+          const repeatedReadFileSigs = new Set<string>();
 
           // Track whether a mutation happened since a given signature was last seen.
           // (Tool-loop is single-threaded across turns; this is safe to keep in-memory.)
@@ -2857,7 +2876,12 @@ export async function createSession(opts: {
                   }
                 }
               }
-              // Hard-break: after 4 consecutive identical reads, stop the session
+              // At 4x, serve from cache if available instead of hard-breaking
+              if (consec >= 4 && READ_FILE_CACHE_TOOLS.has(toolName) && readFileCacheBySig.has(sig)) {
+                repeatedReadFileSigs.add(sig);
+                continue;
+              }
+              // Hard-break: after 4 consecutive identical reads with no cache, stop the session
               if (consec >= 4) {
                 throw new Error(
                   `tool ${toolName}: identical read repeated ${consec}x consecutively; breaking loop. ` +
@@ -3039,6 +3063,7 @@ export async function createSession(opts: {
             const sig = `${name}:${rawArgs || '{}'}`;
             let content = '';
             let reusedCachedReadOnlyExec = false;
+            let reusedCachedReadTool = false;
 
             if (name === 'exec' && repeatedReadOnlyExecSigs.has(sig)) {
               const cached = execObservationCacheBySig.get(sig);
@@ -3048,7 +3073,15 @@ export async function createSession(opts: {
               }
             }
 
-            if (!reusedCachedReadOnlyExec) {
+            if (READ_FILE_CACHE_TOOLS.has(name) && repeatedReadFileSigs.has(sig)) {
+              const cached = readFileCacheBySig.get(sig);
+              if (cached) {
+                content = withCachedReadObservationHint(cached);
+                reusedCachedReadTool = true;
+              }
+            }
+
+            if (!reusedCachedReadOnlyExec && !reusedCachedReadTool) {
               if (isSpawnTask) {
                 content = await runSpawnTask(args);
               } else if (builtInFn) {
@@ -3060,6 +3093,11 @@ export async function createSession(opts: {
                 };
                 const value = await builtInFn(callCtx as any, args);
                 content = typeof value === 'string' ? value : JSON.stringify(value);
+
+                if (READ_FILE_CACHE_TOOLS.has(name) && typeof content === 'string' && !content.startsWith('ERROR:')) {
+                  readFileCacheBySig.set(sig, content);
+                }
+
                 if (name === 'exec') {
                   // Successful exec clears blocked-loop counters.
                   blockedExecAttemptsBySig.clear();
