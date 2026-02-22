@@ -1557,6 +1557,22 @@ export async function createSession(opts: {
     if (!opts?.dry) {
       if (dropped.length && vault) {
         try {
+          // Store the original/current user prompt before compaction so it survives context loss.
+          let userPromptToPreserve: string | null = null;
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.role === 'user') {
+              const text = userContentToText((m.content ?? '') as UserContent).trim();
+              if (text && !text.startsWith('[Trifecta Vault') && !text.startsWith('[Vault context') && text.length > 20) {
+                userPromptToPreserve = text;
+                break;
+              }
+            }
+          }
+          if (userPromptToPreserve) {
+            await vault.upsertNote('current_task', userPromptToPreserve.slice(0, 2000), 'system');
+          }
+
           await vault.archiveToolMessages(dropped as ChatMessage[], new Map());
           await vault.note('compaction_summary', `Dropped ${dropped.length} messages (${freedTokens} tokens).`);
         } catch {
@@ -2306,6 +2322,24 @@ export async function createSession(opts: {
 
         if (dropped.length && vault) {
           try {
+            // Store the original/current user prompt before compaction so it survives context loss.
+            // Find the last substantive user message that looks like a task/instruction.
+            let userPromptToPreserve: string | null = null;
+            for (let i = beforeMsgs.length - 1; i >= 0; i--) {
+              const m = beforeMsgs[i];
+              if (m.role === 'user') {
+                const text = userContentToText((m.content ?? '') as UserContent).trim();
+                // Skip vault injection messages and short prompts
+                if (text && !text.startsWith('[Trifecta Vault') && !text.startsWith('[Vault context') && text.length > 20) {
+                  userPromptToPreserve = text;
+                  break;
+                }
+              }
+            }
+            if (userPromptToPreserve) {
+              await vault.upsertNote('current_task', userPromptToPreserve.slice(0, 2000), 'system');
+            }
+
             const toArchive = lens
               ? await Promise.all(dropped.map((m) => archiveToolOutputForVault(m as ChatMessage)))
               : dropped;
