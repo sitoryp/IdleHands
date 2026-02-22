@@ -86,6 +86,40 @@ function looksLikeCodeContent(line: string): boolean {
 }
 
 /**
+ * Check if a single line is a complete JSON object or array.
+ */
+function isSingleLineJson(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+
+  // Complete JSON object: {...}
+  if (/^\{[^{}]*\}$/.test(trimmed)) return true;
+
+  // Complete JSON array: [...]
+  if (/^\[[^\[\]]*\]$/.test(trimmed)) return true;
+
+  // JSON object with nested structures (balanced braces)
+  if (/^\{.*\}$/.test(trimmed) || /^\[.*\]$/.test(trimmed)) {
+    // Check if braces are balanced
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (const ch of trimmed) {
+      if (escape) { escape = false; continue; }
+      if (ch === '\\') { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (!inString) {
+        if (ch === '{' || ch === '[') depth++;
+        if (ch === '}' || ch === ']') depth--;
+      }
+    }
+    return depth === 0;
+  }
+
+  return false;
+}
+
+/**
  * Convert markdown to Telegram HTML.
  * Handles: code blocks, inline code, bold, italic, strikethrough, links, headings, lists.
  * Auto-detects JSON-like content and wraps in code blocks.
@@ -136,8 +170,8 @@ export function markdownToTelegramHtml(md: string): string {
         autoCodeLines.push(lines[j]!);
         j++;
       }
-      // Only wrap if we have 2+ lines that look like code
-      if (autoCodeLines.filter(l => l.trim()).length >= 2) {
+      // Wrap if we have 2+ code-like lines OR single-line JSON
+      if (autoCodeLines.filter(l => l.trim()).length >= 2 || isSingleLineJson(line)) {
         out.push(`<pre><code>${escapeHtml(autoCodeLines.join('\n'))}</code></pre>`);
         i = j - 1;
         continue;
