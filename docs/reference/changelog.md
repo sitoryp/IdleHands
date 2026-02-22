@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.1.13 (2026-02-21)
+
+### Bug fix
+
+- **Vault: preserve user prompt before compaction** — The last substantive user prompt is now stored in the vault before compaction occurs. This ensures the original task survives context loss when messages are dropped during compaction.
+
+## 1.1.12 (2026-02-21)
+
+### Model catalog
+
+- New `idlehands models` commands for model discovery and metadata:
+  - `scan` — scan directories for GGUF, HuggingFace, and safetensors models
+  - `list` — list cataloged models with filtering
+  - `info` — show detailed model metadata (params, MoE, capabilities)
+  - `where` — show model file paths
+  - `verify` — verify model files are readable
+  - `tags` — manage model tags
+  - `discover` — discover running model servers across hosts
+- Deep metadata extraction:
+  - MoE active parameter estimation
+  - Vision/tools/audio capability detection
+  - Architecture details (layers, hidden size, attention heads)
+  - Context length and vocab size
+- Remote host scanning via `--host <id>` for SSH hosts
+- Smart catalog caching with mtime-based validation
+
+### Encrypted secrets
+
+- New `idlehands secrets` commands for encrypted-at-rest secret storage:
+  - `init` — initialize encrypted store with passphrase
+  - `unlock`/`lock` — manage session unlock state
+  - `set`/`get`/`delete` — store and retrieve secrets
+  - `list` — list stored secret IDs
+  - `rotate-passphrase` — change encryption passphrase
+- AES-256-GCM envelope encryption
+- Argon2id or scrypt key derivation (auto-selects best available)
+- Auto-locking TTL (10 minutes default)
+- Secret reference syntax: `secret://<id>` for transparent resolution
+- SSH key materialization: automatically converts `secret://` refs to temp files
+- Automatic redaction of secret values in exec output
+
 ## 1.1.10 (2026-02-21)
 
 ### Bug fixes

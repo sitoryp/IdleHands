@@ -2,6 +2,43 @@
 
 All notable changes to Idle Hands are documented in this file.
 
+## [1.1.13] - 2026-02-21
+
+### Fixed
+
+- **Vault: preserve user prompt before compaction** — Before compacting history, the last substantive user prompt is now stored in the vault with key `current_task`. This ensures the original task/instruction survives context loss when messages are dropped during compaction. Previously, after compaction the model would lose track of what it was supposed to be doing.
+
+## [1.1.12] - 2026-02-21
+
+### Added
+
+- **Model catalog management system**:
+  - `idlehands models scan` — scan directories for GGUF, HuggingFace, and safetensors models
+  - `idlehands models list` — list cataloged models with filtering (`--filter vision=true`)
+  - `idlehands models info <id>` — show detailed model metadata
+  - `idlehands models where <id>` — show model file paths
+  - `idlehands models verify <id>` — verify model files are readable
+  - `idlehands models tags <id> add|remove <tag>` — manage model tags
+  - `idlehands models discover` — discover running servers across hosts
+  - Remote host scanning via `--host <id>` for SSH hosts
+  - Deep metadata extraction: MoE params, vision/tools/audio capabilities, architecture details
+  - Smart catalog caching with mtime validation
+
+- **Encrypted secrets management**:
+  - `idlehands secrets init` — initialize encrypted secrets store with passphrase
+  - `idlehands secrets unlock` — unlock secrets store for current session
+  - `idlehands secrets lock` — manually lock secrets store
+  - `idlehands secrets set <id>` — store encrypted secret
+  - `idlehands secrets get <id>` — retrieve secret value
+  - `idlehands secrets delete <id>` — delete secret
+  - `idlehands secrets list` — list stored secret IDs
+  - `idlehands secrets rotate-passphrase` — change encryption passphrase
+  - AES-256-GCM encryption with Argon2id/scrypt key derivation
+  - Auto-locking TTL (10 minutes default)
+  - Secret reference syntax: `secret://<id>` for SSH keys, passwords, tokens
+  - Automatic redaction of secret values in exec output
+  - Temp file materialization for SSH key references
+
 ## [1.1.10] - 2026-02-21
 
 ### Fixed
