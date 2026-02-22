@@ -67,8 +67,8 @@ describe('read_file', () => {
 });
 
 describe('read_files', () => {
-  test('returns partial results when one file read fails', async () => {
-    await fs.writeFile(path.join(tmpRoot, 'ok.txt'), 'hello\nworld\n', 'utf8');
+  it('returns partial results when one file read fails', async () => {
+    await fs.writeFile(path.join(tmpDir, 'ok.txt'), 'hello\nworld\n', 'utf8');
 
     const out = await read_files(ctx, {
       requests: [

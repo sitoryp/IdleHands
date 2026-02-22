@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 import path from 'node:path';
 
 const SKIP_DIRS = new Set([
@@ -75,7 +76,7 @@ export async function detectRepoCandidates(
 
     if (!isPathAllowed(absDir, allowedDirs)) continue;
 
-    let ents: fs.Dirent[] = [];
+    let ents: Dirent[] = [];
     try {
       ents = await fs.readdir(absDir, { withFileTypes: true });
     } catch {
