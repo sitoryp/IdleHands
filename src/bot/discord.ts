@@ -681,6 +681,7 @@ When you escalate, your request will be re-run on a more capable model.`;
     try {
       const commands = [
         new SlashCommandBuilder().setName('help').setDescription('Show available commands'),
+        new SlashCommandBuilder().setName('version').setDescription('Show version'),
         new SlashCommandBuilder().setName('new').setDescription('Start a new session'),
         new SlashCommandBuilder().setName('status').setDescription('Show session statistics'),
         new SlashCommandBuilder().setName('watchdog').setDescription('Show watchdog settings/status'),

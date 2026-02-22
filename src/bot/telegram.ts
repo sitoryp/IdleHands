@@ -736,6 +736,7 @@ export async function startTelegramBot(config: IdlehandsConfig, botConfig: BotTe
   const telegramCommands = [
     { command: 'start', description: 'Welcome + config summary' },
     { command: 'help', description: 'List commands' },
+    { command: 'version', description: 'Show version' },
     { command: 'new', description: 'Start a new session' },
     { command: 'cancel', description: 'Abort current generation' },
     { command: 'status', description: 'Session stats' },
