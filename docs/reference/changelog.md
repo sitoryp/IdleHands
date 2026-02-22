@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.17 (2026-02-22)
+
+### Bug fixes
+
+- **Read loop threshold increased**: `read_file`, `read_files`, `list_dir` now allow up to 6 consecutive identical calls before hard break (up from 4).
+- **Stronger 4x warning**: "DO NOT make another identical call for this file, it HAS NOT CHANGED. Move on to the NEXT step NOW."
+- **Read cache reuse**: Cached output reused from 2nd call onward to prevent context explosion.
+
 ## 1.1.16 (2026-02-22)
 
 ### Bug fixes
