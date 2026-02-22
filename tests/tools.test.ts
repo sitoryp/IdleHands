@@ -163,7 +163,7 @@ describe('write_file', () => {
       dirPinned: true,
     } as any;
     const outside = '/tmp/idlehands-any-root-write.txt';
-    await write_file(globalCtx, { path: outside, content: 'ok' });
+    await write_file(globalCtx, { path: outside, content: 'ok', overwrite: true });
     const got = await fs.readFile(outside, 'utf8');
     assert.equal(got, 'ok');
   });
