@@ -85,7 +85,8 @@ const HARNESS: Harness[] = [
     defaults: { temperature: 0.2, top_p: 0.95, max_tokens: 16384, trifecta: { vaultMode: 'passive' } },
     thinking: { format: 'xml', openTag: '<think>', closeTag: '</think>', strip: true },
     toolCalls: { reliableToolCallsArray: true, contentFallbackLikely: true, parallelCalls: true, retryOnMalformed: 2 },
-    quirks: QUIRKS_NEEDS_REMINDER
+    quirks: QUIRKS_NEEDS_REMINDER,
+    systemPromptSuffix: 'When answering questions about code, search first (search_files or grep), then read only the relevant files. Never scan an entire directory by reading files one by one.'
   },
   {
     id: 'qwen',

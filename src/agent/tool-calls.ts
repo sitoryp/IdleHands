@@ -19,15 +19,26 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
     }
   };
 
+  const normalizeImplicitArgs = (obj: any): any => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    if (obj.arguments != null) return obj.arguments;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'name' || k === 'type' || k === 'id' || k === 'function') continue;
+      out[k] = v;
+    }
+    return out;
+  };
+
   // Case 1: whole content is JSON
   const whole = tryParse(trimmed);
   if (whole?.tool_calls && Array.isArray(whole.tool_calls)) return whole.tool_calls;
-  if (whole?.name && whole?.arguments) {
+  if (whole?.name) {
     return [
       {
         id: 'call_0',
         type: 'function',
-        function: { name: String(whole.name), arguments: JSON.stringify(whole.arguments) }
+        function: { name: String(whole.name), arguments: typeof whole.arguments === 'string' ? whole.arguments : JSON.stringify(normalizeImplicitArgs(whole)) }
       }
     ];
   }
@@ -43,7 +54,7 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
         type: 'function' as const,
         function: {
           name: String(item.name),
-          arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {})
+          arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(normalizeImplicitArgs(item))
         }
       }));
     }
@@ -93,7 +104,7 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
       }
     }
 
-    if (objects.length > 1) {
+    if (objects.length >= 1) {
       for (const [i, obj] of objects.entries()) {
         const parsed = tryParse(obj);
         if (parsed?.tool_calls && Array.isArray(parsed.tool_calls)) {
@@ -102,13 +113,13 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
           }
           continue;
         }
-        if (parsed?.name && parsed?.arguments != null) {
+        if (parsed?.name) {
           seqCalls.push({
             id: `call_seq_${i}`,
             type: 'function',
             function: {
               name: String(parsed.name),
-              arguments: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments ?? {})
+              arguments: typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(normalizeImplicitArgs(parsed))
             }
           });
         }
@@ -123,12 +134,12 @@ export function parseToolCallsFromContent(content: string): ToolCall[] | null {
   if (start !== -1 && end !== -1 && end > start) {
     const sub = tryParse(trimmed.slice(start, end + 1));
     if (sub?.tool_calls && Array.isArray(sub.tool_calls)) return sub.tool_calls;
-    if (sub?.name && sub?.arguments) {
+    if (sub?.name) {
       return [
         {
           id: 'call_0',
           type: 'function',
-          function: { name: String(sub.name), arguments: typeof sub.arguments === 'string' ? sub.arguments : JSON.stringify(sub.arguments) }
+          function: { name: String(sub.name), arguments: typeof sub.arguments === 'string' ? sub.arguments : JSON.stringify(normalizeImplicitArgs(sub)) }
         }
       ];
     }
