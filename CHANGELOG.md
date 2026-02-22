@@ -2,6 +2,19 @@
 
 All notable changes to Idle Hands are documented in this file.
 
+## [1.1.16] - 2026-02-22
+
+### Fixed
+
+- **Multi-repo candidate auto-allow**: When `requireDirPinForMutations` is true but cwd matches one of the repo candidates, mutations now proceed automatically instead of blocking.
+- **Exec outside-cwd respects approval mode**: In `yolo` or `auto-edit` modes, commands targeting paths outside cwd are allowed with a warning instead of blocked. Plan/reject/default modes still block.
+- **Pre-break read warnings**: At 3rd consecutive identical read_file/read_files/list_dir call, an explicit warning message is injected before the hard break at 4x.
+- **Telegram code block auto-detection**: JSON objects/arrays (single-line or multi-line) are now automatically wrapped in code blocks even without markdown fences.
+
+### Added
+
+- Expanded read-only exec command detection: `git blame`, `git remote`, `git config --get`, `file`, `which`, `type`, `uname`, `env`, `printenv`, `id`, `whoami`, `pwd`.
+
 ## [1.1.14] - 2026-02-21
 
 ### Fixed
