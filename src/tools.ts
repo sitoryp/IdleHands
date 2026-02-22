@@ -409,6 +409,11 @@ export async function read_file(ctx: ToolContext, args: any) {
   }
 
   const text = buf.toString('utf8');
+
+  if (!text) {
+    return `# ${p}\n[file is empty (0 bytes)]`;
+  }
+
   const lines = text.split(/\r?\n/);
 
   let start = 1;
@@ -1124,6 +1129,7 @@ export async function list_dir(ctx: ToolContext, args: any) {
 
   await walk(p, 0);
   if (count >= maxEntries) lines.push(`[truncated after ${maxEntries} entries]`);
+  if (!lines.length) return `[empty directory: ${p}]`;
   return lines.join('\n');
 }
 
@@ -1539,10 +1545,26 @@ export async function exec(ctx: ToolContext, args: any) {
     errText = (errText ? errText + '\n' : '') + `[killed after ${timeout}s timeout]`;
   }
 
-  const result: ExecResult = { 
-    rc, 
-    out: outText, 
-    err: errText, 
+  // When a search command (grep/rg/ag/ack/find) exits with rc=1 and produces
+  // no output, add a semantic hint so the model understands "no results" is the
+  // answer and doesn't retry the same command in a loop.
+  if (rc === 1 && !outText && !errText) {
+    const cmdLower = command.toLowerCase().trim();
+    if (/(?:^|\|)\s*(?:grep|rg|ag|ack|find)\b/.test(cmdLower)) {
+      outText = '[no matches found]';
+    }
+  }
+
+  // When a command succeeds (rc=0) but produces no output at all, add a hint
+  // so the model knows the command ran successfully and doesn't retry expecting output.
+  if (rc === 0 && !outText && !errText && !killed) {
+    outText = '[command completed successfully with no output]';
+  }
+
+  const result: ExecResult = {
+    rc,
+    out: outText,
+    err: errText,
     truncated: outT.truncated || errT.truncated || capOut || capErr,
     ...(execCwdWarning && { warnings: [execCwdWarning.trim()] })
   };
@@ -1640,6 +1662,17 @@ async function execWithPty(args: ExecWithPtyArgs): Promise<string> {
   let errText = '';
   if (killed) {
     errText = `[killed after ${timeout}s timeout]`;
+  }
+
+  // Semantic hints for empty output (same as non-pty exec path).
+  if (rc === 1 && !outText && !errText) {
+    const cmdLower = command.toLowerCase().trim();
+    if (/(?:^|\|)\s*(?:grep|rg|ag|ack|find)\b/.test(cmdLower)) {
+      outText = '[no matches found]';
+    }
+  }
+  if (rc === 0 && !outText && !errText && !killed) {
+    outText = '[command completed successfully with no output]';
   }
 
   const result: ExecResult = {

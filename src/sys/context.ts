@@ -116,7 +116,9 @@ export async function sys_context(_ctx: any, args: any): Promise<string> {
     throw new Error(`sys_context: invalid scope "${scope}". Valid: ${VALID_SCOPES.join(', ')}`);
   }
 
-  return collectSnapshot(scope as SysScope);
+  const result = await collectSnapshot(scope as SysScope);
+  if (!result) return `[sys_context: no data returned for scope "${scope}"]`;
+  return result;
 }
 
 /**
