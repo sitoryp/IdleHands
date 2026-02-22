@@ -737,7 +737,7 @@ export type AgentSession = {
   /** Clear accumulated plan steps */
   clearPlan: () => void;
   /** Manual context compaction. */
-  compactHistory: (opts?: { topic?: string; hard?: boolean; force?: boolean; dry?: boolean }) => Promise<{
+  compactHistory: (opts?: { topic?: string; hard?: boolean; force?: boolean; dry?: boolean; reason?: string }) => Promise<{
     beforeMessages: number;
     afterMessages: number;
     freedTokens: number;
@@ -1509,15 +1509,65 @@ export async function createSession(opts: {
     planSteps = [];
   };
 
+  const getLatestObjectiveText = (): string => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== 'user') continue;
+      const text = userContentToText((m.content ?? '') as UserContent).trim();
+      if (!text) continue;
+      if (text.startsWith('[system]')) continue;
+      if (text.startsWith('[Trifecta Vault')) continue;
+      if (text.startsWith('[Vault context')) continue;
+      return text;
+    }
+    return '';
+  };
+
+  const compactionVaultGuidance = (): string => {
+    if (!vault) return '';
+    if (vaultMode === 'active' || activeVaultTools) {
+      return 'Vault memory is available. Retrieve prior context with vault_search(query="...") when needed.';
+    }
+    if (vaultMode === 'passive') {
+      return 'Vault memory is in passive mode; relevant entries may be auto-injected when available.';
+    }
+    return '';
+  };
+
+  const buildCompactionSystemNote = (kind: 'auto' | 'manual', dropped: number): string => {
+    const prefix = kind === 'auto'
+      ? `[auto-compacted: ${dropped} old messages dropped to stay within context budget.]`
+      : `[compacted: ${dropped} messages dropped.]`;
+    const guidance = compactionVaultGuidance();
+    return guidance ? `${prefix} ${guidance}` : prefix;
+  };
+
+  let lastAskInstructionText = '';
+  let lastCompactionReminderObjective = '';
+  const injectCompactionReminder = (reason: string) => {
+    const objective = (getLatestObjectiveText() || lastAskInstructionText || '').trim();
+    if (!objective) return;
+    const clippedObjective = objective.length > 1600 ? `${objective.slice(0, 1600)}\n[truncated]` : objective;
+    if (clippedObjective === lastCompactionReminderObjective) return;
+    lastCompactionReminderObjective = clippedObjective;
+
+    const vaultHint = compactionVaultGuidance();
+    messages.push({
+      role: 'user',
+      content:
+        `[system] Context was compacted (${reason}). Continue the SAME task from the current state; do not restart.\n` +
+        `Most recent user objective:\n${clippedObjective}` +
+        (vaultHint ? `\n\n${vaultHint}` : ''),
+    });
+  };
+
   // Session-level vault context injection: search vault for entries relevant to
-  // the last user message and inject them into the conversation. Used after any
-  // compaction to restore context the model lost when messages were dropped.
+  // the latest substantive objective and inject them into the conversation.
+  // Used after compaction to restore context the model lost when messages were dropped.
   let lastVaultInjectionQuery = '';
   const injectVaultContext = async () => {
     if (!vault) return;
-    let lastUser: any = null;
-    for (let j = messages.length - 1; j >= 0; j--) { if (messages[j].role === 'user') { lastUser = messages[j]; break; } }
-    const userText = userContentToText((lastUser?.content ?? '') as UserContent).trim();
+    const userText = (getLatestObjectiveText() || lastAskInstructionText || '').trim();
     if (!userText) return;
     const query = userText.slice(0, 200);
     if (query === lastVaultInjectionQuery) return;
@@ -1537,7 +1587,7 @@ export async function createSession(opts: {
     });
   };
 
-  const compactHistory = async (opts?: { topic?: string; hard?: boolean; force?: boolean; dry?: boolean }) => {
+  const compactHistory = async (opts?: { topic?: string; hard?: boolean; force?: boolean; dry?: boolean; reason?: string }) => {
     const beforeMessages = messages.length;
     const beforeTokens = estimateTokensFromMessages(messages);
 
@@ -1600,8 +1650,11 @@ export async function createSession(opts: {
       }
       messages = compacted;
       if (dropped.length) {
-        messages.push({ role: 'system', content: `[compacted: ${dropped.length} messages archived to Vault - vault_search to recall]` });
+        messages.push({ role: 'system', content: buildCompactionSystemNote('manual', dropped.length) });
         await injectVaultContext().catch(() => {});
+        if (opts?.reason || opts?.force) {
+          injectCompactionReminder(opts?.reason ?? 'history compaction');
+        }
       }
     }
 
@@ -2056,6 +2109,8 @@ export async function createSession(opts: {
     };
 
     const rawInstructionText = userContentToText(instruction).trim();
+    lastAskInstructionText = rawInstructionText;
+    lastCompactionReminderObjective = '';
     await hookManager.emit('ask_start', { askId, instruction: rawInstructionText });
     const projectDir = cfg.dir ?? process.cwd();
     const reviewKeys = reviewArtifactKeys(projectDir);
@@ -2374,8 +2429,9 @@ export async function createSession(opts: {
         messages = compacted;
 
         if (dropped.length) {
-          messages.push({ role: 'system', content: `[auto-compacted: ${dropped.length} old messages dropped to stay within context budget. Do NOT re-read files or re-run commands you have already seen — use vault_search to recall prior results if needed.]` } as ChatMessage);
+          messages.push({ role: 'system', content: buildCompactionSystemNote('auto', dropped.length) } as ChatMessage);
           await injectVaultContext().catch(() => {});
+          injectCompactionReminder('auto context-budget compaction');
         }
 
         const ac = makeAbortController();
@@ -2427,7 +2483,11 @@ export async function createSession(opts: {
             if (isContextWindowExceededError(e) && overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS) {
               overflowCompactionAttempts++;
               const useHardCompaction = overflowCompactionAttempts > 1;
-              const compacted = await compactHistory({ force: true, hard: useHardCompaction });
+              const compacted = await compactHistory({
+                force: true,
+                hard: useHardCompaction,
+                reason: 'server context-window overflow recovery',
+              });
               const mode = useHardCompaction ? 'hard' : 'force';
               messages.push({
                 role: 'system',
