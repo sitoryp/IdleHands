@@ -126,6 +126,20 @@ describe('write_file', () => {
     );
   });
 
+  it('auto-allows mutations when cwd matches a repo candidate even if dirPinned=false', async () => {
+    const autoCtx = {
+      ...ctx,
+      cwd: path.join(tmpDir, 'repo', 'subdir'),
+      requireDirPinForMutations: true,
+      dirPinned: false,
+      repoCandidates: [path.join(tmpDir, 'repo'), '/home/sitoryp/other-repo'],
+    } as any;
+    await fs.mkdir(autoCtx.cwd, { recursive: true });
+    await write_file(autoCtx, { path: 'auto-pinned.txt', content: 'ok' });
+    const got = await fs.readFile(path.join(autoCtx.cwd, 'auto-pinned.txt'), 'utf8');
+    assert.equal(got, 'ok');
+  });
+
   it('allows filesystem-wide writes when allowed root is / and dir is pinned', async () => {
     const globalCtx = {
       ...ctx,
@@ -416,6 +430,29 @@ describe('exec', () => {
       () => exec(ctx, { command: 'node server.js &' }),
       /blocked background command/i
     );
+  });
+
+  it('blocks out-of-cwd absolute targets in default approval mode', async () => {
+    const outside = `/tmp/idlehands-outside-default-${Date.now()}.txt`;
+    await assert.rejects(
+      () => exec({ ...ctx, approvalMode: 'default' }, { command: `touch ${outside}` }),
+      /outside the working directory/i,
+    );
+  });
+
+  it('allows out-of-cwd absolute targets in auto-edit/yolo approval modes', async () => {
+    const outsideAuto = `/tmp/idlehands-outside-auto-${Date.now()}.txt`;
+    const outsideYolo = `/tmp/idlehands-outside-yolo-${Date.now()}.txt`;
+
+    const rAuto = await exec({ ...ctx, approvalMode: 'auto-edit' }, { command: `touch ${outsideAuto}` });
+    const pAuto = JSON.parse(rAuto);
+    assert.equal(pAuto.rc, 0);
+    await fs.access(outsideAuto);
+
+    const rYolo = await exec({ ...ctx, approvalMode: 'yolo' }, { command: `touch ${outsideYolo}` });
+    const pYolo = JSON.parse(rYolo);
+    assert.equal(pYolo.rc, 0);
+    await fs.access(outsideYolo);
   });
 
   it('collapses stack traces', async () => {

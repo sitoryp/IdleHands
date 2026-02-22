@@ -192,7 +192,6 @@ const APPROVAL_MODE_SET = new Set<ApprovalMode>(['plan', 'reject', 'default', 'a
 const LSP_TOOL_NAMES = ['lsp_diagnostics', 'lsp_symbols', 'lsp_hover', 'lsp_definition', 'lsp_references'] as const;
 const LSP_TOOL_NAME_SET = new Set<string>(LSP_TOOL_NAMES);
 const FILE_MUTATION_TOOL_SET = new Set(['edit_file', 'edit_range', 'apply_patch', 'write_file', 'insert_file']);
-const NO_CONSECUTIVE_IDENTICAL_READ_CALLS = new Set(['read_file', 'read_files', 'list_dir', 'list_dirs']);
 
 function normalizeApprovalMode(value: unknown): ApprovalMode | undefined {
   if (typeof value !== 'string') return undefined;
@@ -1403,6 +1402,7 @@ export async function createSession(opts: {
       noConfirm: cfg.no_confirm || cfg.approval_mode === 'yolo',
       dryRun: cfg.dry_run,
       mode: cfg.mode ?? 'code',
+      approvalMode: cfg.approval_mode,
       allowedWriteRoots: cfg.allowed_write_roots,
       requireDirPinForMutations: cfg.require_dir_pin_for_mutations,
       dirPinned: cfg.dir_pinned,
@@ -2742,16 +2742,27 @@ export async function createSession(opts: {
               }
               const consec = consecutiveCounts.get(sig) ?? 1;
 
-              // Stricter no-repeat policy for common scan tools.
-              if (NO_CONSECUTIVE_IDENTICAL_READ_CALLS.has(toolName) && consec >= 2) {
-                throw new Error(
-                  `tool ${toolName}: identical read/list call repeated ${consec}x consecutively; blocked. ` +
-                  `Do NOT call ${toolName} again with the same path/options back-to-back. Reuse the previous result or refine arguments.`
-                );
-              }
-
+              // At 3x, inject vault context and a strong warning before the hard break at 4x.
               if (consec >= 3) {
                 await injectVaultContext().catch(() => {});
+
+                if (consec === 3) {
+                  let warningMsg: string | null = null;
+                  if (toolName === 'read_file') {
+                    warningMsg = 'Stop repeatedly reading the same file over and over.';
+                  } else if (toolName === 'read_files') {
+                    warningMsg = 'Stop repeatedly reading the same files over and over.';
+                  } else if (toolName === 'list_dir') {
+                    warningMsg = 'Stop repeatedly reading the same directory over and over.';
+                  }
+
+                  if (warningMsg) {
+                    messages.push({
+                      role: 'system',
+                      content: `${warningMsg} The content has not changed between reads. Reuse the prior result and move to the next step.`,
+                    } as ChatMessage);
+                  }
+                }
               }
               // Hard-break: after 4 consecutive identical reads, stop the session
               if (consec >= 4) {

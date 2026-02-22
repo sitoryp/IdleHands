@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { ExecResult, type ToolStreamEvent } from './types.js';
+import { ExecResult, type ToolStreamEvent, type ApprovalMode } from './types.js';
 import { ToolError } from './tools/tool-error.js';
 
 import type { ReplayStore } from './replay.js';
@@ -19,6 +19,7 @@ export type ToolContext = {
   noConfirm: boolean;
   dryRun: boolean;
   mode?: 'code' | 'sys';
+  approvalMode?: ApprovalMode;
   allowedWriteRoots?: string[];
   requireDirPinForMutations?: boolean;
   dirPinned?: boolean;
@@ -1326,12 +1327,17 @@ export async function exec(ctx: ToolContext, args: any) {
   if (!command) throw new Error('exec: missing command');
 
   // Out-of-cwd enforcement: block exec cwd or `cd` navigating outside the project.
+  // Exception: in yolo/auto-edit mode, allow with a warning instead of blocking.
   const absCwd = path.resolve(ctx.cwd);
+  const allowOutsideCwd = ctx.approvalMode === 'yolo' || ctx.approvalMode === 'auto-edit';
   let execCwdWarning = '';
   if (args?.cwd) {
     const absExecCwd = path.resolve(cwd);
     if (!isWithinDir(absExecCwd, absCwd)) {
-      throw new Error(`exec: BLOCKED — cwd "${absExecCwd}" is outside the working directory "${absCwd}". Use relative paths and work within the project directory.`);
+      if (!allowOutsideCwd) {
+        throw new Error(`exec: BLOCKED — cwd "${absExecCwd}" is outside the working directory "${absCwd}". Use relative paths and work within the project directory.`);
+      }
+      execCwdWarning = `\n[WARNING] cwd "${absExecCwd}" is outside the working directory "${absCwd}". Proceeding due to ${ctx.approvalMode} mode.`;
     }
   }
   if (command) {
@@ -1341,17 +1347,23 @@ export async function exec(ctx: ToolContext, args: any) {
     while ((cdMatch = cdPattern.exec(command)) !== null) {
       const cdTarget = path.resolve(cdMatch[2]);
       if (!isWithinDir(cdTarget, absCwd)) {
-        throw new Error(`exec: BLOCKED — command navigates to "${cdTarget}" which is outside the working directory "${absCwd}". Use relative paths and work within the project directory.`);
+        if (!allowOutsideCwd) {
+          throw new Error(`exec: BLOCKED — command navigates to "${cdTarget}" which is outside the working directory "${absCwd}". Use relative paths and work within the project directory.`);
+        }
+        execCwdWarning = `\n[WARNING] Command navigates to "${cdTarget}" which is outside the working directory "${absCwd}". Proceeding due to ${ctx.approvalMode} mode.`;
       }
     }
     // Detect absolute paths in file-creating commands (mkdir, cat >, tee, touch, etc.)
-    // that target directories outside cwd — HARD BLOCK
+    // that target directories outside cwd — HARD BLOCK unless yolo/auto-edit
     const absPathPattern = /(?:mkdir|cat\s*>|tee|touch|cp|mv)\s+(?:-\S+\s+)*(['"]?)(\/[^\s'";&|]+)\1/g;
     let apMatch: RegExpExecArray | null;
     while ((apMatch = absPathPattern.exec(command)) !== null) {
       const absTarget = path.resolve(apMatch[2]);
       if (!isWithinDir(absTarget, absCwd)) {
-        throw new Error(`exec: BLOCKED — command targets "${absTarget}" which is outside the working directory "${absCwd}". Use relative paths to work within the project directory.`);
+        if (!allowOutsideCwd) {
+          throw new Error(`exec: BLOCKED — command targets "${absTarget}" which is outside the working directory "${absCwd}". Use relative paths to work within the project directory.`);
+        }
+        execCwdWarning = `\n[WARNING] Command targets "${absTarget}" which is outside the working directory "${absCwd}". Proceeding due to ${ctx.approvalMode} mode.`;
       }
     }
   }
@@ -1767,10 +1779,17 @@ function enforceMutationWithinCwd(tool: string, resolvedPath: string, ctx: ToolC
   const allowAny = roots.includes('/');
 
   // If session requires explicit /dir pinning, block all mutations until pinned.
+  // Exception: if cwd matches one of the repo candidates, auto-allow.
   if (ctx.requireDirPinForMutations && !ctx.dirPinned) {
-    const candidates = (ctx.repoCandidates ?? []).slice(0, 8).join(', ');
-    const hint = candidates ? ` Candidates: ${candidates}` : '';
-    throw new Error(`${tool}: BLOCKED — multiple repository candidates detected. Set repo root explicitly with /dir <path> before editing files.${hint}`);
+    const candidates = ctx.repoCandidates ?? [];
+    const cwdMatchesCandidate = candidates.some((c) => {
+      const absCandidate = path.resolve(c);
+      return absCwd === absCandidate || isWithinDir(absCwd, absCandidate);
+    });
+    if (!cwdMatchesCandidate) {
+      const hint = candidates.length ? ` Candidates: ${candidates.slice(0, 8).join(', ')}` : '';
+      throw new Error(`${tool}: BLOCKED — multiple repository candidates detected. Set repo root explicitly with /dir <path> before editing files.${hint}`);
+    }
   }
 
   // Respect allowed roots first.
